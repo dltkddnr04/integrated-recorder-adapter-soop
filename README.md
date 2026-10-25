@@ -60,6 +60,8 @@ GOWORK=off go build -o integrated-recorder-adapter-soop ./cmd/integrated-recorde
 
 독립 Go Grid 수신 연구와 합성 fixture 테스트는 [tests/grid-poc](tests/grid-poc/README.md)에 있습니다. 기존 Adapter Protocol v1 플러그인과 분리된 실험 코드이며 운영 어댑터에 통합되지 않았습니다.
 
+Python 포팅과 Streamlink 외부 플러그인 PoC는 [tests/streamlink-grid-poc](tests/streamlink-grid-poc/README.md)에 있습니다.
+
 ## 생태계와 라이선스
 
 - [Integrated Recorder Core](https://github.com/integrated-recorder/core) — recording과 canonical archive

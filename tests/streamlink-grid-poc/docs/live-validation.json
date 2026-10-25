@@ -1,0 +1,73 @@
+{
+  "cli": {
+    "started_utc": "2026-10-25T02:27:40.489344+00:00",
+    "cli_exit": 0,
+    "wall_seconds": 32.59,
+    "output_bytes": 34338200,
+    "diagnostic": ""
+  },
+  "grid_commands": {
+    "0xc748": 1980
+  },
+  "media": {
+    "media_packets": 1980,
+    "payload_bytes": 33373755,
+    "wire_bytes": 33542055,
+    "video_frames": 1917,
+    "audio_frames": 63,
+    "sequence_discontinuities": 0,
+    "video": {
+      "codec": "h264",
+      "width": 1920,
+      "height": 1080,
+      "fps_numerator": 120000,
+      "fps_denominator": 2000
+    },
+    "audio": {
+      "codec": "aac",
+      "sample_rate": 48000,
+      "channels": 2
+    },
+    "playable_video_frames": 1917,
+    "media_timeline_seconds": 31.933
+  },
+  "ffprobe": {
+    "streams": [
+      {
+        "codec_name": "h264",
+        "width": 1920,
+        "height": 1080,
+        "r_frame_rate": "60/1",
+        "avg_frame_rate": "60/1",
+        "start_time": "1.000000",
+        "duration": "31.949667",
+        "nb_read_frames": "1917"
+      },
+      {
+        "codec_name": "aac",
+        "sample_rate": "48000",
+        "channels": 2,
+        "r_frame_rate": "0/0",
+        "avg_frame_rate": "0/0",
+        "start_time": "0.529000",
+        "duration": "31.765333",
+        "nb_read_frames": "1512"
+      }
+    ],
+    "format": {
+      "duration": "32.420667",
+      "size": "34338200"
+    }
+  },
+  "full_av_decode_exit": 0,
+  "decode_diagnostics_empty": true,
+  "raw_payload_and_elementary_bytes_reconstructed_from_wire": true,
+  "streamlink_stdout_equals_python_ts_output": true,
+  "file_preserved_after_separate_cli_process": true,
+  "sha256_verified": true,
+  "transport": "native_tcp_gateway_center_parent",
+  "official_streamlink_version": "8.6.2",
+  "authentication": "anonymous_public_watch",
+  "target_identifiers": "retained privately, not published",
+  "raw_media_in_repository": false
+}

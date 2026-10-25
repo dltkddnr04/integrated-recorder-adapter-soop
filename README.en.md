@@ -60,6 +60,8 @@ This repository uses the [Adapter SDK for Go](https://github.com/integrated-reco
 
 The independent Go Grid receiver research and synthetic fixture tests are in [tests/grid-poc](tests/grid-poc/README.md). This experimental code is separate from the Adapter Protocol v1 plugin and is not integrated into the production adapter.
 
+The Python port and external Streamlink plugin PoC are in [tests/streamlink-grid-poc](tests/streamlink-grid-poc/README.md).
+
 ## Ecosystem and license
 
 - [Integrated Recorder Core](https://github.com/integrated-recorder/core) — recording and canonical archives
