@@ -20,6 +20,7 @@ class Config:
     duration: float | None = None
     max_bytes: int | None = None
     capture_dir: str | None = field(default=None, repr=False)
+    diagnostics_dir: str | None = field(default=None, repr=False)
 
     def validate(self):
         if not identifier(self.broadcaster) or (

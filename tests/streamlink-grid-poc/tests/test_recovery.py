@@ -167,6 +167,13 @@ def test_cache_overlap_recovers_without_resetting_mux(simulation, failure):
     assert sink.stats["duplicate_frames_excluded"] == 2
     assert sink.stats["failover_successes"] == 1
     assert sink.stats["recovered_ranges"] == 1
+    assert sink.stats["overlap_duplicates_discarded"] == 1
+    assert sink.stats["cache_frames_received"] == 3
+    assert sink.stats["cache_frames_replayed"] == 1
+    assert sink.stats["recovery_success"] == 1
+    assert sink.stats["failure_detection_ms"] == 0
+    assert sink.stats["recovery_wire_bytes"] > 0
+    assert sink.stats["recovery_media_bytes"] > 0
     assert sink.mux.cc == baseline.mux.cc
     expected = []
     baseline = SyntheticSink(expected.append)
@@ -181,6 +188,20 @@ def test_cache_overlap_recovers_without_resetting_mux(simulation, failure):
     ]
     assert starts == [1, 2]
     assert events.count("parent_failover_succeeded") == 1
+
+
+def test_partial_packet_reset_is_discarded_before_cache_overlap_recovery(simulation):
+    partial = controls() + media(1) + media(2)[:21]
+    sink, _, _, net = simulation(
+        [
+            (partial, "reset"),
+            (controls() + media(1) + media(2), "deadline"),
+        ]
+    )
+    assert sink.stats["video_frames"] == 2
+    assert sink.stats["duplicate_frames_excluded"] == 1
+    assert sink.stats["failover_successes"] == 1
+    assert all(sock.closed for sock in net.sockets)
 
 
 @pytest.mark.parametrize(
@@ -522,7 +543,25 @@ def test_retry_and_rediscovery_counts_are_globally_bounded(simulation):
     assert calls == [1]
 
 
-def test_streamio_close_cancels_active_failover(monkeypatch):
+def test_retry_budget_resets_after_each_proven_media_recovery(simulation):
+    calls = []
+
+    def rediscover():
+        calls.append(1)
+        return [Parent(("1.1.1.1", 10000), 1, 0)], len(calls) + 42
+
+    scripts = [(controls() + media(1), "eof")]
+    for number in range(2, 13):
+        scripts.append(
+            (controls() + media(number - 1) + media(number), "deadline" if number == 12 else "eof")
+        )
+    sink, _, _, _ = simulation(scripts, rediscover, count=1)
+    assert sink.stats["parent_connections"] == 12
+    assert sink.stats["failover_attempts"] == sink.stats["failover_successes"] == 11
+    assert len(calls) == 11
+
+
+def test_streamio_close_cancels_center_rediscovery(monkeypatch):
     from soop_grid.bootstrap import Config
     from soop_grid.stream import SoopGridReader
     from streamlink import Streamlink
@@ -533,16 +572,17 @@ def test_streamio_close_cancels_active_failover(monkeypatch):
     failures = []
 
     def runner(config, network, emit, report, stats):
-        # Real recovery loop: both normally issued synthetic endpoints fail.
-        def connect(_):
-            opened.set()
-            raise GridError("tcp_connect_failed")
-
-        monkeypatch.setattr(network, "connect", connect)
         emit(b"G" * 188)
         sink = MediaSink(emit)
+
+        def rediscover():
+            opened.set()
+            while not network.stop.wait(0.01):
+                pass
+            raise Cancelled("receiver_closed")
+
         try:
-            receive_media(network, [Parent(("8.8.8.8", 1), 1, 0)] * 8, 12345, 42, sink, report, 35)
+            receive_media(network, [], 12345, 42, sink, report, 35, rediscover=rediscover)
         except Cancelled:
             failures.append("cancelled")
         finally:
@@ -587,18 +627,20 @@ def test_control_traffic_cannot_hide_media_stall(monkeypatch):
         receive_media(
             net, [Parent(("8.8.8.8", 1), 1, 0)], 12345, 42, MediaSink(lambda _: None), lambda _: None
         )
-    assert reads == [7] and all(s.closed for s in net.sockets)
+    assert reads == [3] and all(s.closed for s in net.sockets)
 
 
-def test_live_resumed_requires_server_push_transition_and_new_media(simulation):
+def test_live_push_request_is_not_reported_as_live_catchup_completion(simulation):
     _, _, events, _ = simulation(
         [
             (controls() + media(1), "eof"),
             (controls() + media(1) + media(2) + parent_packet(0xC742) + media(3), "deadline"),
         ]
     )
-    assert events.count("grid_live_resumed") == 1
-    assert events.index("parent_failover_succeeded") < events.index("grid_live_resumed")
+    assert events.count("live_push_transition_requested") == 1
+    assert "grid_live_resumed" not in events
+    assert events.index("parent_failover_succeeded") < events.index("live_push_transition_requested")
+    assert "catchup_complete" not in events
 
 
 def test_cache_only_recovery_does_not_claim_live_push_resumed(simulation):
@@ -606,4 +648,36 @@ def test_cache_only_recovery_does_not_claim_live_push_resumed(simulation):
         [(controls() + media(1), "eof"), (controls() + media(1) + media(2), "deadline")]
     )
     assert "parent_failover_succeeded" in events
+    assert "live_push_transition_requested" not in events
     assert "grid_live_resumed" not in events
+
+
+def test_recovery_events_and_metrics_have_no_endpoint_or_secret_fields(simulation):
+    from soop_grid.diagnostics import Diagnostics
+
+    sink, _, events, _ = simulation(
+        [
+            (controls() + media(1), "eof"),
+            (controls() + media(1) + media(2), "deadline"),
+        ]
+    )
+    expected = {
+        "recovery_started",
+        "parent_failure_detected",
+        "parent_candidate_selected",
+        "parent_tcp_connect_started",
+        "parent_tcp_connected",
+        "parent_handshake_completed",
+        "cache_request_sent",
+        "cache_first_media_received",
+        "overlap_frame_verified",
+        "first_new_frame_accepted",
+        "recovery_completed",
+    }
+    assert expected <= set(events)
+    facts = Diagnostics(None, lambda: sink.stats).facts()
+    assert facts["recovery_success"] == 1
+    assert facts["overlap_duplicates_discarded"] == 1
+    assert not any("address" in key or "ticket" in key or "node_key" in key for key in facts)
+    assert "catchup_duration_ms" not in facts
+    assert facts["catchup_state"] == "unverified_live_boundary"

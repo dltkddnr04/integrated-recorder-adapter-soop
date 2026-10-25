@@ -61,8 +61,8 @@ def read_exact(sock, size, deadline):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise GridError("network_read_timeout")
-        sock.settimeout(remaining)
         try:
+            sock.settimeout(remaining)
             chunk = sock.recv(size - len(data))
         except socket.timeout:
             raise GridError("network_read_timeout") from None

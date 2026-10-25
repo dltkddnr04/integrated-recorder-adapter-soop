@@ -52,12 +52,36 @@ live SOOP cache overlap and natural Parent failure have not been verified.
 
 Active-active Parent reception and cross-Parent aggregation are deliberately absent.
 The protocol's simultaneous-session limit, node-key scope and shared sequence space
-remain unverified. Multiple Parent connections will not be attempted speculatively.
+remain unverified in production. The separate bounded field probe can test two
+explicitly authorized server-issued connections, including two sockets to one
+endpoint. It does not change production reception or establish independent failure
+domains.
 
 ## H.264 timeline and MPEG-TS
 
 `media.py` validates the observed Grid chunk header and preserves original payload
-bytes. `h264clock.py` currently supports progressive Annex-B H.264, POC type 0,
+bytes. The body layout used by the parser is:
+
+| Body offset | Type | Meaning used by the receiver |
+| --- | --- | --- |
+| 2 | LE u16 | Base header length (observed 69) |
+| 4 | LE u32 | Metadata extension length (observed 0 and 50) |
+| 8 | LE u32 | Encoded media payload length |
+| 12 | LE u64 | Grid frame number |
+| 40 | byte | Media kind |
+| 41 | LE u64 | Raw Grid timestamp |
+
+Encoded bytes start at `base_header_length + extension_length`, and the sum of both
+lengths and encoded length must exactly equal the body length. Base header and
+extension are separately capped at 4096 bytes; the outer Parent body remains capped
+at 4 MiB. Codec prefix checks still apply. A captured extended I-frame demonstrated
+`69 + 50 + 251963 == 252082`; its Annex-B starts at byte 119. The old parser rejected
+this valid length layout solely because the extension was nonzero. The extension
+is retained in optional raw wire capture but excluded from H.264/AAC elementary
+streams. Its content semantics are unknown and it is treated as opaque metadata;
+codec configuration must still be available through the supported media path.
+
+`h264clock.py` currently supports progressive Annex-B H.264, POC type 0,
 non-FMO PPS, one picture per Grid video chunk and fixed-frame-rate VUI timing. It
 derives display order from POC and decode order from the observed Grid 100-ns
 timestamp. It rejects absent/unsupported timing, interlacing, unsupported POC mode,

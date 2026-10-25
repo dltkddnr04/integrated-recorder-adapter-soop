@@ -5,6 +5,7 @@
 import threading
 import time
 import logging
+from collections import deque
 
 from streamlink.exceptions import StreamError
 from streamlink.stream.stream import Stream, StreamIO
@@ -13,6 +14,7 @@ from .auth import HTTP
 from .bootstrap import bootstrap
 from .center import discover_parent
 from .gateway import obtain_certificate
+from .diagnostics import Diagnostics, safe_error, stop_reason
 from .media import MediaSink
 from .parent import receive_media
 from .protocol import Cancelled, GridError, Network
@@ -65,7 +67,8 @@ class BoundedBuffer:
 
     def finish(self, error=None):
         with self.condition:
-            self.error = error
+            if self.error is None:
+                self.error = error
             self.eof = True
             self.condition.notify_all()
 
@@ -103,11 +106,14 @@ class BoundedBuffer:
 
 def receive(config, network, emit, report, stats):
     session = credentials = sink = None
+    primary = None
     try:
         session = bootstrap(config, report, http_factory=lambda: HTTP(network.stop))
         credentials = obtain_certificate(network, session, report)
         parents, node_key = discover_parent(network, session.center, credentials, report)
         sink = MediaSink(emit, config.capture_dir)
+        stats.update(sink.stats)
+        sink.stats = stats  # Heartbeats can observe counters while reception is running.
         receive_media(
             network,
             parents,
@@ -121,11 +127,18 @@ def receive(config, network, emit, report, stats):
         )
         if not sink.mux.video_frames:
             raise GridError("no_playable_grid_video")
+    except BaseException as error:
+        primary = error
+        raise
     finally:
         try:
             if sink:
-                sink.close()
-                stats.update(sink.stats)
+                try:
+                    sink.close()
+                except Exception:
+                    if primary is None:
+                        raise
+                    report("cleanup_failed_after_primary_error")
         finally:
             if credentials:
                 credentials.clear()
@@ -144,19 +157,40 @@ class SoopGridReader(StreamIO):
         self.runner = runner
         self.thread = None
         self.stats = {}
-        self.stages = []
+        self.stages = deque(maxlen=128)
         self._close_lock = threading.Lock()
         self._closing = False
         self.failure_code = None
+        self.reader_state = "initializing"
+        self.diagnostics = Diagnostics(stream.config.diagnostics_dir, self._snapshot)
+
+    def _snapshot(self):
+        facts = dict(self.stats)
+        with self.buffer.condition:
+            facts.update(buffer_used_bytes=len(self.buffer.data), buffer_peak_bytes=self.buffer.peak_bytes)
+        with self.network._lock:
+            facts["active_sockets"] = len(self.network._sockets)
+        facts["reader_state"] = self.reader_state
+        return facts
+
+    def _report(self, event):
+        self.stages.append(event)
+        stage = next(
+            (x for x in ("bootstrap", "gateway", "center", "parent") if event.startswith(x)), "receiver"
+        )
+        self.diagnostics.event(stage, event)
 
     def open(self):
         if self.thread is not None or self.closed:
             raise StreamError("Grid reader already opened or closed")
+        self.diagnostics.start()
         self.thread = threading.Thread(target=self._run, name="soop-grid-receiver", daemon=True)
         self.thread.start()
         try:
             self.buffer.wait_ready()
         except Exception as error:
+            if not self.failure_code:
+                self.diagnostics.fail(GridError("reader_timeout"))
             self.close()
             if self.failure_code and error is not None:
                 error.grid_error_code = self.failure_code
@@ -166,16 +200,26 @@ class SoopGridReader(StreamIO):
     def _run(self):
         error = None
         try:
-            self.runner(self.stream.config, self.network, self.buffer.put, self.stages.append, self.stats)
-        except Exception as exc:
+            self.runner(self.stream.config, self.network, self.buffer.put, self._report, self.stats)
+            self.diagnostics.complete(self.stats.get("stop_reason", "receiver_completed_unknown"))
+        except BaseException as exc:
             # Never expose raw HTTP/socket exceptions or arbitrary worker text.
-            code = str(exc) if isinstance(exc, GridError) else "receiver_internal_failure"
+            code = safe_error(exc)
             self.failure_code = code
+            reason = (
+                "center_rediscovery_failed"
+                if self.stats.get("center_rediscovery_failed") and stop_reason(exc) != "authentication_denied"
+                else None
+            )
+            self.diagnostics.fail(exc, reason)
             if not self._closing:
                 error = StreamError("SOOP Grid: " + code)
+                _log.error("Native Grid receiver stopped: %s (%s)", code, self.diagnostics.reason)
         finally:
             self.network.close()
             self.buffer.finish(error)
+            self.diagnostics.event(event="worker_finished")
+            self.diagnostics.summary()
 
     def readable(self):
         return not self.closed
@@ -184,8 +228,18 @@ class SoopGridReader(StreamIO):
         if self.closed or self._closing:
             return b""
         try:
-            return self.buffer.read(size)
+            result = self.buffer.read(size)
+            if result:
+                self.reader_state = "streaming"
+            elif size != 0:
+                self.reader_state = "eof"
+                self.diagnostics.event("reader", "reader_eof")
+            return result
         except StreamError as exc:
+            self.reader_state = "error"
+            if not self.failure_code:
+                self.diagnostics.fail(GridError("reader_timeout"))
+            self.diagnostics.event("reader", "reader_error")
             self.close()
             # Streamlink's output runner expects OSError from read(), while
             # Stream.open() reports StreamError. Keep both interfaces correct.
@@ -200,12 +254,17 @@ class SoopGridReader(StreamIO):
         with self._close_lock:
             if self.closed:
                 return
+            if self.thread and self.thread.is_alive() and self.diagnostics.reason is None:
+                self.diagnostics.complete("user_cancelled")
             self._closing = True
             self.network.close()
             self.buffer.close()
         if self.thread and self.thread is not threading.current_thread():
             self.thread.join(12)
         self.stream.config.clear()
+        self.reader_state = "closed"
+        self.diagnostics.event("reader", "reader_closed")
+        self.diagnostics.close()
         super().close()
 
 
@@ -223,7 +282,10 @@ class SoopGridStream(Stream):
         if self._opened:
             raise StreamError("Grid streams are single-session; enumerate again to reopen")
         self._opened = True
-        return SoopGridReader(self).open()
+        try:
+            return SoopGridReader(self).open()
+        except GridError as exc:
+            raise StreamError("SOOP Grid: " + safe_error(exc)) from None
 
 
 class OfficialHLSFallback:

@@ -20,6 +20,17 @@ def test_parent_byte_order_and_bounds():
         )
     )[0]
     assert p.address == ("8.8.8.8", 10000) and p.frame == 99
+    repeated = parse_parents(
+        json_body(
+            {
+                "list": [
+                    {"parent_ip": 0x08080808, "parent_port": 0x1027, "quality": 1, "cur_frame_no": 99},
+                    {"parent_ip": 0x08080808, "parent_port": 0x1027, "quality": 1, "cur_frame_no": 100},
+                ]
+            }
+        )
+    )
+    assert len(repeated) == 1
     for body in [
         b"",
         struct.pack("<I", 99999) + b"{}",

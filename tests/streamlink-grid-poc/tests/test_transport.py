@@ -54,6 +54,27 @@ def test_auto_success_clears_deferred_credentials_without_hls_attempt():
     assert fallback.opened == 0 and fallback.cleared
 
 
+def test_auto_never_splices_hls_after_grid_output_and_read_failure():
+    from soop_grid.bootstrap import Config
+    from soop_grid.protocol import GridError
+    from soop_grid.stream import SoopGridReader, SoopGridStream
+
+    session = Streamlink()
+
+    def runner(config, network, emit, report, stats):
+        emit(b"G" * 188)
+        raise GridError("network_read_timeout")
+
+    reader = SoopGridReader(SoopGridStream(session, Config("fixture_channel", "12345")), runner).open()
+    fallback = FakeStream(result="must-not-open")
+    output = SoopAutoStream(session, FakeStream(result=reader), fallback).open()
+    assert output.read(188) == b"G" * 188
+    with pytest.raises(OSError, match="network_read_timeout"):
+        output.read(1)
+    assert fallback.opened == 0 and fallback.cleared
+    assert not reader.thread.is_alive()
+
+
 def test_hls_mode_delegates_to_official_plugin_and_auto_is_lazy(monkeypatch):
     session = Streamlink()
     session.plugins.load_path(str(Path(__file__).resolve().parents[1] / "plugins"))

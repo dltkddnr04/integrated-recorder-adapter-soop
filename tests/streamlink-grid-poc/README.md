@@ -62,9 +62,13 @@ Optional arguments:
 - `--soop-grid-stream-password`: broadcast password (environment input is safer)
 - `--soop-grid-duration`: optional Grid receive duration
 - `--soop-grid-max-bytes`: optional Grid wire-byte limit
+- `--soop-grid-diagnostics`: new private directory for redacted JSONL heartbeats and atomic summary
 
 The requested quality label `original` is not proof of output resolution. Inspect
 actual SPS/codec metadata.
+
+See [diagnostics and field tools](docs/DIAGNOSTICS.md) to investigate receiver errors,
+process exits, or output failures without sharing authentication or media contents.
 
 ## Current reliability boundary
 

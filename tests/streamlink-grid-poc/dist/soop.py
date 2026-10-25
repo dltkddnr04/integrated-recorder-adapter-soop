@@ -12,7 +12,7 @@ $type live
 """
 
 
-# Module: protocol; source SHA-256: 3bb83276cdb376ee8cb6395ef095fe8370c9b5c836e2e55376d59bd7699da883
+# Module: protocol; source SHA-256: 402cd43a860628a3daaa332f8291779e041243d8b1cc87977884171b412ce5e2
 import ipaddress as _sg_protocol_ipaddress
 import socket as _sg_protocol_socket
 import struct as _sg_protocol_struct
@@ -64,8 +64,8 @@ def _sg_protocol_read_exact(sock, size, deadline):
         remaining = deadline - _sg_protocol_time.monotonic()
         if remaining <= 0:
             raise _sg_protocol_GridError('network_read_timeout')
-        sock.settimeout(remaining)
         try:
+            sock.settimeout(remaining)
             chunk = sock.recv(size - len(data))
         except _sg_protocol_socket.timeout:
             raise _sg_protocol_GridError('network_read_timeout') from None
@@ -310,6 +310,183 @@ def _sg_crypto_service6(guid, timestamp, counter):
     return _sg_crypto_wire_hash(_sg_crypto_pad16(second)) + _sg_crypto_ctr(_sg_crypto_SERVICE_KEY, _sg_crypto_SERVICE_IV, second)
 
 
+# Module: diagnostics; source SHA-256: ef677557cfaa0f13e81f7696279288e9b9ce4a3f8c1cff0bc95c0272579dd3b5
+import errno as _sg_diagnostics_errno
+import json as _sg_diagnostics_json
+import logging as _sg_diagnostics_logging
+import math as _sg_diagnostics_math
+import os as _sg_diagnostics_os
+from pathlib import Path as _sg_diagnostics_Path
+import threading as _sg_diagnostics_threading
+import time as _sg_diagnostics_time
+_sg_diagnostics_Cancelled = _sg_protocol_Cancelled
+_sg_diagnostics_GridError = _sg_protocol_GridError
+_sg_diagnostics__log = _sg_diagnostics_logging.getLogger('streamlink.plugins.soopgrid')
+_sg_diagnostics_EVENTS = frozenset(['account_session_confirmed', 'center_join_accepted', 'center_rediscovery_failed', 'center_rediscovery_completed', 'cleanup_failed_after_primary_error', 'gateway_certificate_received', 'gateway_login_accepted', 'grid_duration_limit_reached', 'grid_frame_gap_detected', 'grid_frame_gap_recovered', 'grid_frame_gap_unrecoverable', 'grid_live_resumed', 'live_push_transition_requested', 'grid_media_byte_limit_reached', 'heartbeat', 'media_packet_rejected', 'native_tk_ftk_metadata_received', 'new_node_key_obtained', 'parent_c748_media_received', 'parent_candidate_failed', 'parent_candidate_selected', 'parent_connected', 'parent_connection_lost', 'parent_failure_detected', 'parent_handshake_completed', 'parent_last_media_received', 'parent_tcp_connect_started', 'parent_tcp_connected', 'parent_discovery_received', 'parent_failover_exhausted', 'parent_failover_started', 'parent_failover_succeeded', 'parent_rediscovery_started', 'recovery_completed', 'recovery_started', 'recovery_failed', 'cache_request_sent', 'cache_first_media_received', 'overlap_frame_verified', 'first_new_frame_accepted', 'public_watch_ticket_received', 'reader_closed', 'reader_eof', 'reader_error', 'receiver_started', 'unknown_event', 'worker_finished'])
+_sg_diagnostics_NUMERIC_FIELDS = frozenset('\nmedia_packets payload_bytes wire_bytes parent_wire_bytes video_frames audio_frames sequence_discontinuities\nparent_connections failover_attempts failover_successes rediscoveries duplicate_frames_excluded\ngap_events recovered_ranges unrecoverable_ranges parent_connection_attempts parent_packets\nlast_normal_frame last_video_dts_90k last_video_pts_90k active_parents last_control_command\ncache_request_count last_cache_request_start last_media_monotonic\nfailure_detection_ms candidate_selection_ms center_rediscovery_ms parent_tcp_connect_ms\nparent_handshake_ms cache_first_byte_ms overlap_verification_ms first_new_frame_ms\ntotal_recovery_ms cache_frames_received cache_frames_replayed overlap_duplicates_discarded\nmissing_frames frame_identity_conflicts recovery_wire_bytes recovery_media_bytes\nrecovery_success recovery_failures recovery_failure_attempts catchup_duration_ms catchup_throughput_bytes_per_sec\nfailover_backoff_ms_saved\nrejected_body_bytes rejected_header_bytes rejected_extension_bytes rejected_payload_bytes\nrejected_packet_preservation_failed\ncenter_rediscovery_failed\nextended_media_packets media_extension_bytes\n'.split())
+
+def _sg_diagnostics_safe_error(error):
+    code = str(error) if isinstance(error, _sg_diagnostics_GridError) else 'receiver_internal_failure'
+    return code if code in _sg_diagnostics_ERROR_CODES else 'receiver_internal_failure'
+_sg_diagnostics_STOP_REASONS = frozenset('user_cancelled duration_limit byte_limit network_eof network_timeout\nparent_stalled parent_retry_exhausted center_rediscovery_failed authentication_denied\ncache_overlap_unavailable frame_sequence_gap media_timestamp_invalid buffer_backpressure\ndisk_write_error receiver_internal_error receiver_error receiver_completed_unknown'.split())
+_sg_diagnostics_TRACE_FUNCTIONS = frozenset('receive receive_media parse_media read_frame read_exact\ninspect add write close put _wait discover_parent obtain_certificate bootstrap\nauth_body join_body parse_parents accept reject'.split())
+
+def _sg_diagnostics_safe_sites(error):
+    sites = []
+    trace = error.__traceback__
+    while trace is not None:
+        name = trace.tb_frame.f_code.co_name
+        if name.startswith('_sg_'):
+            name = name.split('_', 3)[-1]
+        if name in _sg_diagnostics_TRACE_FUNCTIONS:
+            sites.append({'function': name, 'line': trace.tb_lineno})
+        trace = trace.tb_next
+    return sites[-4:]
+
+def _sg_diagnostics_stop_reason(error):
+    code = _sg_diagnostics_safe_error(error)
+    if isinstance(error, _sg_diagnostics_Cancelled):
+        return 'user_cancelled'
+    if isinstance(error, OSError) and error.errno in (_sg_diagnostics_errno.ENOSPC, _sg_diagnostics_errno.EIO, _sg_diagnostics_errno.EDQUOT):
+        return 'disk_write_error'
+    if 'denied' in code or 'verification_required' in code:
+        return 'authentication_denied'
+    if code == 'buffer_backpressure_timeout':
+        return 'buffer_backpressure'
+    if code == 'peer_closed_or_truncated':
+        return 'network_eof'
+    if code in ('network_read_timeout', 'reader_timeout'):
+        return 'network_timeout'
+    if code == 'parent_media_stalled':
+        return 'parent_stalled'
+    if code in ('parent_retry_limit', 'recovery_candidates_exhausted'):
+        return 'parent_retry_exhausted'
+    if code == 'recovery_overlap_unavailable':
+        return 'cache_overlap_unavailable'
+    if code in ('frame_sequence_gap_or_reset', 'frame_identity_conflict'):
+        return 'frame_sequence_gap'
+    if code.startswith(('h264_', 'media_dts_', 'media_pts_', 'media_timestamp_', 'grid_video_', 'frame_timestamp_')):
+        return 'media_timestamp_invalid'
+    return 'receiver_internal_error' if code == 'receiver_internal_failure' else 'receiver_error'
+
+class _sg_diagnostics_Diagnostics:
+
+    def __init__(self, directory, snapshot):
+        self.started = _sg_diagnostics_time.monotonic()
+        self.snapshot = snapshot
+        self.lock = _sg_diagnostics_threading.RLock()
+        self.stop = _sg_diagnostics_threading.Event()
+        self.thread = None
+        self.reason = None
+        self.error_code = None
+        self.exception_category = None
+        self.error_sites = []
+        self.last_transport_error = None
+        self.stage = 'initializing'
+        self.failed = False
+        self.path = _sg_diagnostics_Path(directory) if directory else None
+        self.file = None
+        if self.path:
+            try:
+                self.path.mkdir(mode=448, parents=False, exist_ok=False)
+                fd = _sg_diagnostics_os.open(self.path / 'events.jsonl', _sg_diagnostics_os.O_WRONLY | _sg_diagnostics_os.O_CREAT | _sg_diagnostics_os.O_EXCL, 384)
+                self.file = _sg_diagnostics_os.fdopen(fd, 'w', encoding='utf-8')
+            except OSError:
+                raise _sg_diagnostics_GridError('diagnostic_write_failed') from None
+
+    def facts(self):
+        data = self.snapshot()
+        result = {'elapsed_seconds': round(_sg_diagnostics_time.monotonic() - self.started, 3), 'stage': self.stage}
+        for key in _sg_diagnostics_NUMERIC_FIELDS | {'buffer_used_bytes', 'buffer_peak_bytes', 'active_sockets'}:
+            value = data.get(key)
+            if type(value) in (int, float) and _sg_diagnostics_math.isfinite(value):
+                if key == 'last_media_monotonic':
+                    result['last_media_elapsed_seconds'] = round(value - self.started, 3)
+                else:
+                    result[key] = value
+        state = data.get('reader_state')
+        if state in ('initializing', 'streaming', 'eof', 'error', 'closed'):
+            result['reader_state'] = state
+        catchup_state = data.get('catchup_state')
+        if catchup_state in ('not_started', 'unverified_live_boundary'):
+            result['catchup_state'] = catchup_state
+        recovery_failure_code = data.get('recovery_failure_code')
+        if recovery_failure_code in _sg_diagnostics_ERROR_CODES:
+            result['recovery_failure_code'] = recovery_failure_code
+        result.update(stop_reason=self.reason, error_code=self.error_code, exception_category=self.exception_category, diagnostic_io_failed=self.failed, error_sites=self.error_sites, last_transport_error=self.last_transport_error)
+        return result
+
+    def _io_failure(self):
+        if not self.failed:
+            _sg_diagnostics__log.error('SOOP Grid diagnostic_write_failed')
+        self.failed = True
+
+    def event(self, stage=None, event='heartbeat'):
+        with self.lock:
+            if event in ('peer_closed_or_truncated', 'network_read_timeout', 'network_read_failed', 'network_write_failed', 'tcp_connect_failed', 'parent_media_stalled'):
+                self.last_transport_error = event
+            if stage is not None:
+                self.stage = stage if stage in ('receiver', 'bootstrap', 'gateway', 'center', 'parent', 'reader', 'cleanup', 'initializing') else 'receiver'
+            if self.file and (not self.failed):
+                try:
+                    self.file.write(_sg_diagnostics_json.dumps({**self.facts(), 'event': event if event in _sg_diagnostics_EVENTS or event in _sg_diagnostics_ERROR_CODES else 'unknown_event'}) + '\n')
+                    self.file.flush()
+                except OSError:
+                    self._io_failure()
+
+    def fail(self, error, reason=None):
+        with self.lock:
+            if self.reason is None:
+                self.reason = reason if reason in _sg_diagnostics_STOP_REASONS else _sg_diagnostics_stop_reason(error)
+                self.error_code = _sg_diagnostics_safe_error(error)
+                self.error_sites = _sg_diagnostics_safe_sites(error)
+                self.exception_category = 'grid_error' if isinstance(error, _sg_diagnostics_GridError) else 'os_error' if isinstance(error, OSError) else 'unexpected_exception'
+
+    def complete(self, reason):
+        with self.lock:
+            if self.reason is None:
+                self.reason = reason if reason in _sg_diagnostics_STOP_REASONS else 'receiver_completed_unknown'
+
+    def summary(self):
+        with self.lock:
+            if not self.path or self.failed:
+                return
+            temporary = self.path / 'summary.tmp'
+            try:
+                fd = _sg_diagnostics_os.open(temporary, _sg_diagnostics_os.O_WRONLY | _sg_diagnostics_os.O_CREAT | _sg_diagnostics_os.O_TRUNC, 384)
+                with _sg_diagnostics_os.fdopen(fd, 'w', encoding='utf-8') as out:
+                    _sg_diagnostics_json.dump(self.facts(), out, indent=2)
+                    out.flush()
+                    _sg_diagnostics_os.fsync(out.fileno())
+                _sg_diagnostics_os.replace(temporary, self.path / 'summary.json')
+            except OSError:
+                self._io_failure()
+
+    def start(self):
+        if self.file:
+            self.event(event='receiver_started')
+            self.thread = _sg_diagnostics_threading.Thread(target=self._heartbeat, name='soop-grid-diagnostics', daemon=True)
+            self.thread.start()
+
+    def _heartbeat(self):
+        while not self.stop.wait(2):
+            self.event()
+
+    def close(self):
+        self.stop.set()
+        if self.thread and self.thread is not _sg_diagnostics_threading.current_thread():
+            self.thread.join(3)
+        with self.lock:
+            self.summary()
+            if self.file:
+                try:
+                    self.file.close()
+                except OSError:
+                    self._io_failure()
+                self.file = None
+_sg_diagnostics_ERROR_CODES = frozenset(['aac_pes_limit', 'account_credentials_required', 'account_input_invalid', 'account_login_denied_or_verification_required', 'account_session_unconfirmed', 'adts_header_invalid', 'adts_sample_rate_invalid', 'adult_check_unconfirmed', 'audio_prefix_unconfirmed', 'bootstrap_schema_invalid', 'broadcast_number_bounds', 'broadcast_target_invalid', 'buffer_backpressure_timeout', 'cache_frame_bounds', 'cache_request_limit', 'capture_byte_limit_bounds', 'capture_close_failed', 'capture_deadline_reached', 'capture_duration_bounds', 'capture_limits_invalid', 'center_access_denied', 'center_body_limit', 'center_init_unexpected', 'center_rediscovery_failed', 'center_rediscovery_failed', 'center_session_missing', 'certificate_length_invalid', 'channel_live_number_unavailable', 'control_checksum_invalid', 'diagnostic_write_failed', 'first_party_http_failed', 'first_party_http_rejected', 'first_party_json_invalid', 'frame_identity_conflict', 'frame_sequence_gap_or_reset', 'frame_timestamp_regression', 'gateway_body_limit', 'gateway_certificate_denied', 'gateway_certificate_fields_invalid', 'gateway_cookie_missing_or_invalid', 'gateway_login_denied', 'gateway_login_fields_invalid', 'gateway_login_response_layout', 'gateway_login_unterminated_field', 'gateway_negative_reply', 'gateway_ticket_missing_or_invalid', 'grid_video_dts_not_increasing', 'guid_invalid', 'h264_chroma_unsupported', 'h264_codec_configuration_changed', 'h264_dimensions_invalid', 'h264_field_bounds', 'h264_golomb_limit', 'h264_header_truncated', 'h264_hrd_limit', 'h264_interlaced_unsupported', 'h264_level_dpb_invalid', 'h264_multiple_pictures_per_grid_chunk', 'h264_nal_header_invalid', 'h264_parameter_set_missing', 'h264_poc_mode_unsupported', 'h264_poc_regression_out_of_bound', 'h264_poc_width_invalid', 'h264_pps_id_limit', 'h264_pts_before_dts', 'h264_reorder_bound_invalid', 'h264_reorder_bound_unconfirmed', 'h264_reorder_limit', 'h264_separate_colour_plane_unsupported', 'h264_slice_count_limit', 'h264_slice_groups_unsupported', 'h264_slice_type_invalid', 'h264_sps_id_limit', 'h264_switching_slice_unsupported', 'h264_timing_changed', 'h264_timing_unconfirmed', 'h264_vcl_partition_or_extension_unsupported', 'h264_vui_timing_invalid', 'http_destination_invalid', 'http_response_limit', 'incoming_body_limit', 'invalid_server_endpoint', 'issued_certificate_invalid', 'issued_seed_required', 'issued_ticket_required', 'join_field_bounds', 'live_metadata_denied_or_offline', 'live_target_changed', 'media_dts_bounds', 'media_dts_not_monotonic', 'media_header_short', 'media_kind_unconfirmed', 'media_layout_unconfirmed', 'media_pts_bounds', 'media_timestamp_bounds', 'network_read_failed', 'network_read_timeout', 'network_write_failed', 'no_playable_grid_video', 'no_usable_server_parent', 'parent_access_denied', 'parent_body_limit', 'parent_discovery_missing', 'parent_header_invalid', 'parent_list_invalid', 'parent_list_length', 'parent_list_short', 'parent_media_stalled', 'parent_packet_limit', 'parent_quality_changed', 'parent_rediscovery_empty', 'parent_retry_limit', 'password_state_unknown', 'peer_closed_or_truncated', 'private_capture_create_failed', 'public_policy_restricted_or_unknown', 'public_watch_access_denied', 'public_watch_schema_invalid', 'reader_closed', 'reader_timeout', 'receiver_closed', 'receiver_internal_failure', 'recovery_candidates_exhausted', 'recovery_deadline_exhausted', 'recovery_overlap_unavailable', 'scoped_cookie_invalid', 'sps_chroma', 'sps_cycle_limit', 'sps_dimensions_invalid', 'sps_golomb_limit', 'sps_poc_invalid', 'sps_truncated', 'stream_password_encoding_invalid', 'stream_password_state_mismatch', 'tcp_connect_failed', 'video_prefix_unconfirmed', 'watch_target_changed'])
+
+
 # Module: mpegts; source SHA-256: 8fffe155f36cebc117733a36914e798b71e117cdcdf8e1212652a8d6908f4e22
 import struct as _sg_mpegts_struct
 _sg_mpegts_GridError = _sg_protocol_GridError
@@ -459,7 +636,7 @@ class _sg_mpegts_TSMux:
         return out + self._pes(video, pts, payload, pcr=pts if video else None)
 
 
-# Module: recovery; source SHA-256: 57589dc1d03c8757c9d9401a4b21daccd2976f45597790f348f93c93bfc05c6e
+# Module: recovery; source SHA-256: 5eeb74560e2494d69cc429bea4dc0de0e4a0f3182f7a0196110d36f1c98372ff
 import hashlib as _sg_recovery_hashlib
 from collections import OrderedDict as _sg_recovery_OrderedDict
 _sg_recovery_GridError = _sg_protocol_GridError
@@ -474,7 +651,7 @@ class _sg_recovery_Continuity:
         self.recovering = False
         self.anchor = False
         self.pending_resume = False
-        for name in ('parent_connections', 'failover_attempts', 'failover_successes', 'rediscoveries', 'duplicate_frames_excluded', 'gap_events', 'recovered_ranges', 'unrecoverable_ranges'):
+        for name in ('parent_connections', 'failover_attempts', 'failover_successes', 'rediscoveries', 'duplicate_frames_excluded', 'gap_events', 'recovered_ranges', 'unrecoverable_ranges', 'overlap_duplicates_discarded', 'missing_frames', 'frame_identity_conflicts'):
             stats.setdefault(name, 0)
 
     def begin(self):
@@ -486,6 +663,12 @@ class _sg_recovery_Continuity:
             self.report('grid_frame_gap_detected')
 
     def reject(self, code):
+        if self.recovering:
+            self.stats['recovery_failure_code'] = code
+        if code == 'frame_identity_conflict':
+            self.stats['frame_identity_conflicts'] += 1
+        elif code in ('frame_sequence_gap_or_reset', 'recovery_overlap_unavailable'):
+            self.stats['recovery_failure_code'] = code
         if not self.recovering:
             self.stats['gap_events'] += 1
             self.report('grid_frame_gap_detected')
@@ -500,12 +683,15 @@ class _sg_recovery_Continuity:
                 self.reject('frame_identity_conflict')
             if self.recovering and chunk.frame == self.last:
                 self.anchor = True
+                self.stats['overlap_duplicates_discarded'] += 1
             self.stats['duplicate_frames_excluded'] += 1
             return False
         if self.last is not None:
             if self.recovering and (not self.anchor):
                 self.reject('recovery_overlap_unavailable')
             if chunk.frame != self.last + 1:
+                if self.last < chunk.frame < 1 << 64:
+                    self.stats['missing_frames'] += chunk.frame - self.last - 1
                 self.reject('frame_sequence_gap_or_reset')
         kind = 'video' if chunk.kind in ('I', 'P', 'B') else chunk.kind
         if chunk.timestamp < self.timestamps.get(kind, 0):
@@ -515,11 +701,11 @@ class _sg_recovery_Continuity:
         if len(self.recent) > 128:
             self.recent.popitem(last=False)
         self.last = chunk.frame
-        self.stats['last_normal_frame'] = chunk.frame
         self.pending_resume = self.recovering
         return True
 
     def committed(self):
+        self.stats['last_normal_frame'] = self.last
         if self.pending_resume:
             self.pending_resume = self.recovering = False
             self.stats['recovered_ranges'] += 1
@@ -528,7 +714,7 @@ class _sg_recovery_Continuity:
             self.report('parent_failover_succeeded')
 
 
-# Module: bootstrap; source SHA-256: 62754c01d23da27287cfca696a2a06f1d1b878d6c541d5f7672bf9e9baa2579a
+# Module: bootstrap; source SHA-256: fa4172ea8c9afe35a1b7b8a02367c3d37353df72d273c85ab30d204fc1a607b0
 import re as _sg_bootstrap_re
 from dataclasses import dataclass as _sg_bootstrap_dataclass, field as _sg_bootstrap_field
 _sg_bootstrap_HTTP = _sg_auth_HTTP
@@ -549,6 +735,7 @@ class _sg_bootstrap_Config:
     duration: float | None = None
     max_bytes: int | None = None
     capture_dir: str | None = _sg_bootstrap_field(default=None, repr=False)
+    diagnostics_dir: str | None = _sg_bootstrap_field(default=None, repr=False)
 
     def validate(self):
         if not _sg_bootstrap_identifier(self.broadcaster) or (self.bno is not None and (not isinstance(self.bno, str) or not _sg_bootstrap_re.fullmatch('[0-9]{1,10}', self.bno))):
@@ -1015,7 +1202,7 @@ class _sg_h264clock_H264Clock:
         return self._rescale(timestamp_100ns - self.origin_dts) + self.reorder_lead + 90000
 
 
-# Module: media; source SHA-256: e9755f8e9e0b02780c11b8955d950500d3fa1b4b0860aecdcc0a09cdc0acf664
+# Module: media; source SHA-256: 20bcfe306c34575771ebdec7162f8a7a52315d81d7b7e9c7378bf9dd9c48ed99
 import hashlib as _sg_media_hashlib
 import json as _sg_media_json
 import os as _sg_media_os
@@ -1033,23 +1220,31 @@ class _sg_media_Chunk:
     kind: str
     timestamp: int
     payload: bytes = _sg_media_field(repr=False)
+    extension_bytes: int = 0
+
+def _sg_media_layout_facts(body):
+    facts = {'rejected_body_bytes': len(body)}
+    if len(body) >= 12:
+        facts.update(rejected_header_bytes=_sg_media_struct.unpack_from('<H', body, 2)[0], rejected_extension_bytes=_sg_media_struct.unpack_from('<I', body, 4)[0], rejected_payload_bytes=_sg_media_struct.unpack_from('<I', body, 8)[0])
+    return facts
 
 def _sg_media_parse_media(body):
     if len(body) < 69:
         raise _sg_media_GridError('media_header_short')
     header = _sg_media_struct.unpack_from('<H', body, 2)[0]
     extension, size = _sg_media_struct.unpack_from('<II', body, 4)
-    if not 69 <= header <= 4096 or extension or size < 1 or (header + size != len(body)):
+    start = header + extension
+    if not 69 <= header <= 4096 or extension > 4096 or size < 1 or (start + size != len(body)):
         raise _sg_media_GridError('media_layout_unconfirmed')
     kind = chr(body[40])
     if kind not in ('I', 'P', 'B', 'A'):
         raise _sg_media_GridError('media_kind_unconfirmed')
-    payload = body[header:]
+    payload = body[start:]
     if kind in ('I', 'P', 'B') and (len(payload) < 4 or payload[:2] != b'\x00\x00'):
         raise _sg_media_GridError('video_prefix_unconfirmed')
     if kind == 'A' and (len(payload) < 7 or payload[0] != 255 or payload[1] & 240 != 240):
         raise _sg_media_GridError('audio_prefix_unconfirmed')
-    return _sg_media_Chunk(_sg_media_struct.unpack_from('<Q', body, 12)[0], kind, _sg_media_struct.unpack_from('<Q', body, 41)[0], payload)
+    return _sg_media_Chunk(_sg_media_struct.unpack_from('<Q', body, 12)[0], kind, _sg_media_struct.unpack_from('<Q', body, 41)[0], payload, extension)
 
 class _sg_media_Bits:
 
@@ -1184,7 +1379,7 @@ class _sg_media_MediaSink:
         self.path = _sg_media_Path(capture_dir) if capture_dir else None
         self.owns_directory = False
         self.closed = False
-        self.stats = {'media_packets': 0, 'payload_bytes': 0, 'wire_bytes': 0, 'video_frames': 0, 'audio_frames': 0, 'sequence_discontinuities': 0}
+        self.stats = {'media_packets': 0, 'payload_bytes': 0, 'wire_bytes': 0, 'video_frames': 0, 'audio_frames': 0, 'sequence_discontinuities': 0, 'extended_media_packets': 0, 'media_extension_bytes': 0}
         self.payload_hash = _sg_media_hashlib.sha256()
         self.last_frame = None
         try:
@@ -1202,6 +1397,15 @@ class _sg_media_MediaSink:
         if name in self.files:
             self.files[name].write(data)
 
+    def reject(self, frame):
+        if self.owns_directory:
+            try:
+                fd = _sg_media_os.open(self.path / 'rejected-grid-wire.bin', _sg_media_os.O_WRONLY | _sg_media_os.O_CREAT | _sg_media_os.O_EXCL, 384)
+                with _sg_media_os.fdopen(fd, 'wb') as out:
+                    out.write(frame.wire)
+            except OSError:
+                self.stats['rejected_packet_preservation_failed'] = 1
+
     def add(self, frame, discard=False):
         chunk = _sg_media_parse_media(frame.body)
         self.write('grid-wire.bin', frame.wire)
@@ -1210,6 +1414,9 @@ class _sg_media_MediaSink:
         self.stats['media_packets'] += 1
         self.stats['payload_bytes'] += len(chunk.payload)
         self.stats['wire_bytes'] += len(frame.wire)
+        if chunk.extension_bytes:
+            self.stats['extended_media_packets'] += 1
+            self.stats['media_extension_bytes'] += chunk.extension_bytes
         if discard:
             return chunk
         if self.last_frame is not None and chunk.frame != self.last_frame + 1:
@@ -1273,11 +1480,12 @@ class _sg_media_MediaSink:
             raise _sg_media_GridError('capture_close_failed')
 
 
-# Module: parent; source SHA-256: 130b8f0e9d42980f12ca7efb30ad0f3f56f255bf90f97ce835c3a92d420830ad
+# Module: parent; source SHA-256: b461bd1d0651dab34818f3b7ccb0b994bbd2811c76285dfc6e4edec9d1b16add
 import json as _sg_parent_json
 import struct as _sg_parent_struct
 import time as _sg_parent_time
 from dataclasses import dataclass as _sg_parent_dataclass
+_sg_parent_layout_facts = _sg_media_layout_facts
 _sg_parent_parse_media = _sg_media_parse_media
 _sg_parent_Continuity = _sg_recovery_Continuity
 _sg_parent_Cancelled = _sg_protocol_Cancelled
@@ -1285,6 +1493,10 @@ _sg_parent_GridError = _sg_protocol_GridError
 _sg_parent_endpoint = _sg_protocol_endpoint
 _sg_parent_parent_packet = _sg_protocol_parent_packet
 _sg_parent_read_frame = _sg_protocol_read_frame
+_sg_parent_MEDIA_STALL_TIMEOUT = 3.0
+_sg_parent_FAILOVER_BACKOFF_SECONDS = 0.0
+_sg_parent_MAX_PARENT_ATTEMPTS_PER_OUTAGE = 8
+_sg_parent_MAX_CENTER_REDISCOVERIES_PER_OUTAGE = 1
 
 @_sg_parent_dataclass(repr=False)
 class _sg_parent_Parent:
@@ -1304,6 +1516,7 @@ def _sg_parent_parse_parents(body):
         if not isinstance(items, list) or not 1 <= len(items) <= 8:
             raise ValueError
         out = []
+        seen = set()
         for item in items:
             ip, port, quality, frame = (item.get(k, 0) for k in ('parent_ip', 'parent_port', 'quality', 'cur_frame_no'))
             if any((type(v) is not int for v in (ip, port, quality, frame))) or not 0 <= ip <= 4294967295 or (not 0 <= port <= 65535):
@@ -1314,7 +1527,10 @@ def _sg_parent_parse_parents(body):
                 addr = _sg_parent_endpoint('.'.join((str(b) for b in _sg_parent_struct.pack('<I', ip))), (port & 255) << 8 | port >> 8 & 255)
             except _sg_parent_GridError:
                 continue
-            out.append(_sg_parent_Parent(addr, quality, frame))
+            identity = (addr, quality)
+            if identity not in seen:
+                seen.add(identity)
+                out.append(_sg_parent_Parent(addr, quality, frame))
         if not out:
             raise _sg_parent_GridError('no_usable_server_parent')
         return out
@@ -1337,6 +1553,18 @@ def _sg_parent_receive_media(network, parents, bno, node_key, sink, report, dura
     rediscoveries_this_outage = 0
     quality = None
     last_error = 'no_usable_server_parent'
+    recovery_started_at = None
+    recovery_failure_at = None
+    candidate_selection_started = None
+    last_media_at = None
+    stats.setdefault('parent_wire_bytes', 0)
+    stats.setdefault('recovery_wire_bytes', 0)
+    stats.setdefault('recovery_media_bytes', 0)
+    stats.setdefault('cache_frames_received', 0)
+    stats.setdefault('cache_frames_replayed', 0)
+    stats.setdefault('recovery_success', 0)
+    stats.setdefault('recovery_failures', 0)
+    stats.setdefault('catchup_state', 'not_started')
     while not network.stop.is_set():
         if deadline is not None and _sg_parent_time.monotonic() >= deadline:
             if continuity.recovering:
@@ -1345,41 +1573,81 @@ def _sg_parent_receive_media(network, parents, bno, node_key, sink, report, dura
             report('grid_duration_limit_reached')
             return
         if not queue:
-            if rediscover is None or rediscoveries_this_outage >= 1 or attempts >= 8:
+            if rediscover is None or rediscoveries_this_outage >= _sg_parent_MAX_CENTER_REDISCOVERIES_PER_OUTAGE or attempts >= _sg_parent_MAX_PARENT_ATTEMPTS_PER_OUTAGE:
                 report('parent_failover_exhausted')
+                if recovery_started_at is not None:
+                    stats['recovery_failures'] += 1
+                    stats['recovery_failure_code'] = 'recovery_candidates_exhausted'
+                    report('recovery_failed')
                 if continuity.recovering:
                     continuity.reject('recovery_candidates_exhausted')
                 raise _sg_parent_GridError(last_error)
             stats['rediscoveries'] += 1
             rediscoveries_this_outage += 1
+            rediscovery_start = _sg_parent_time.monotonic()
             report('parent_rediscovery_started')
-            queue, node_key = rediscover()
+            try:
+                queue, node_key = rediscover()
+            except _sg_parent_GridError:
+                stats['center_rediscovery_failed'] = 1
+                stats['center_rediscovery_ms'] = round((_sg_parent_time.monotonic() - rediscovery_start) * 1000, 3)
+                stats['recovery_failure_code'] = 'center_rediscovery_failed'
+                if recovery_started_at is not None:
+                    stats['recovery_failures'] += 1
+                report('center_rediscovery_failed')
+                report('recovery_failed')
+                raise
+            stats['center_rediscovery_ms'] = round((_sg_parent_time.monotonic() - rediscovery_start) * 1000, 3)
+            report('center_rediscovery_completed')
+            report('new_node_key_obtained')
             queue = list(queue)
             if not queue:
+                stats['recovery_failure_code'] = 'parent_rediscovery_empty'
+                if recovery_started_at is not None:
+                    stats['recovery_failures'] += 1
+                report('recovery_failed')
                 raise _sg_parent_GridError('parent_rediscovery_empty')
-        if attempts >= 8:
+            candidate_selection_started = _sg_parent_time.monotonic()
+        if attempts >= _sg_parent_MAX_PARENT_ATTEMPTS_PER_OUTAGE:
             report('parent_failover_exhausted')
+            stats['recovery_failure_code'] = 'parent_retry_limit'
+            if recovery_started_at is not None:
+                stats['recovery_failures'] += 1
+            report('recovery_failed')
             raise _sg_parent_GridError('parent_retry_limit')
         parent = queue.pop(0)
+        if candidate_selection_started is not None:
+            stats['candidate_selection_ms'] = round((_sg_parent_time.monotonic() - candidate_selection_started) * 1000, 3)
+            candidate_selection_started = None
+        elif recovery_failure_at is not None:
+            stats['candidate_selection_ms'] = round((_sg_parent_time.monotonic() - recovery_failure_at) * 1000, 3)
+        report('parent_candidate_selected')
         if quality is not None and parent.quality != quality:
             last_error = 'parent_quality_changed'
             report('parent_candidate_failed')
             continue
-        if attempts:
+        if attempts or continuity.recovering:
             stats['failover_attempts'] += 1
             report('parent_failover_started')
-            backoff = 0.1 if deadline is None else min(0.1, max(0, deadline - _sg_parent_time.monotonic()))
-            if network.stop.wait(backoff):
-                raise _sg_parent_Cancelled('receiver_closed')
+            if _sg_parent_FAILOVER_BACKOFF_SECONDS > 0:
+                wait = _sg_parent_FAILOVER_BACKOFF_SECONDS
+                if deadline is not None:
+                    wait = min(wait, max(0.0, deadline - _sg_parent_time.monotonic()))
+                if network.stop.wait(wait):
+                    raise _sg_parent_Cancelled('receiver_closed')
         attempts += 1
         stats['parent_connection_attempts'] = stats.get('parent_connection_attempts', 0) + 1
         sock = None
         try:
+            connect_started = _sg_parent_time.monotonic()
+            report('parent_tcp_connect_started')
             sock = network.connect(parent.address)
+            stats['parent_tcp_connect_ms'] = round((_sg_parent_time.monotonic() - connect_started) * 1000, 3)
             stats['parent_connections'] += 1
+            stats['active_parents'] = 1
             report('parent_connected')
+            report('parent_tcp_connected')
             continuity.begin()
-            resume_live_pending = continuity.recovering
             last_frame = continuity.last if continuity.last is not None else parent.frame
             cache_start = last_frame if continuity.recovering else last_frame + 1
             if not 0 <= cache_start < 1 << 64:
@@ -1387,9 +1655,16 @@ def _sg_parent_receive_media(network, parents, bno, node_key, sink, report, dura
             live_started = False
             connection_requests = 0
             last_media = _sg_parent_time.monotonic()
+            handshake_started = connect_started
+            cache_request_at = None
+            handshake_completed = False
 
             def send(cmd, body=b'', connection=sock):
-                network.send(connection, _sg_parent_parent_packet(cmd, body))
+                data = _sg_parent_parent_packet(cmd, body)
+                network.send(connection, data)
+                stats['parent_wire_bytes'] += len(data)
+                if continuity.recovering:
+                    stats['recovery_wire_bytes'] += len(data)
             send(52014, _sg_parent_struct.pack('<III', bno, node_key, parent.quality))
             while not network.stop.is_set():
                 remaining = None if deadline is None else deadline - _sg_parent_time.monotonic()
@@ -1399,8 +1674,25 @@ def _sg_parent_receive_media(network, parents, bno, node_key, sink, report, dura
                     stats['stop_reason'] = 'duration_limit'
                     report('grid_duration_limit_reached')
                     return
-                frame = _sg_parent_read_frame(sock, 'parent', 3 if remaining is None else min(3, remaining))
+                media_age = max(0.0, _sg_parent_time.monotonic() - last_media)
+                stall_remaining = _sg_parent_MEDIA_STALL_TIMEOUT - media_age
+                if stall_remaining <= 0:
+                    raise _sg_parent_GridError('parent_media_stalled')
+                read_timeout = min(stall_remaining, remaining) if remaining is not None else stall_remaining
+                try:
+                    frame = _sg_parent_read_frame(sock, 'parent', read_timeout)
+                except _sg_parent_GridError as read_error:
+                    if str(read_error) == 'capture_deadline_reached' or (deadline is not None and _sg_parent_time.monotonic() >= deadline):
+                        raise _sg_parent_GridError('capture_deadline_reached') from None
+                    if str(read_error) == 'network_read_timeout' and _sg_parent_time.monotonic() - last_media >= _sg_parent_MEDIA_STALL_TIMEOUT:
+                        raise _sg_parent_GridError('parent_media_stalled') from None
+                    raise
                 stats['parent_packets'] = stats.get('parent_packets', 0) + 1
+                stats['parent_wire_bytes'] += len(frame.wire)
+                if continuity.recovering:
+                    stats['recovery_wire_bytes'] += len(frame.wire)
+                if frame.command != 51016:
+                    stats['last_control_command'] = frame.command
                 packets_without_media += 1
                 if packets_without_media > 8192:
                     raise _sg_parent_GridError('parent_packet_limit')
@@ -1409,40 +1701,86 @@ def _sg_parent_receive_media(network, parents, bno, node_key, sink, report, dura
                 if frame.command in (51014, 7111):
                     send(52015, _sg_parent_struct.pack('<I', parent.quality))
                 elif frame.command == 51015:
+                    if not handshake_completed:
+                        stats['parent_handshake_ms'] = round((_sg_parent_time.monotonic() - handshake_started) * 1000, 3)
+                        handshake_completed = True
+                        report('parent_handshake_completed')
                     requests_without_media += 1
                     connection_requests += 1
+                    stats['cache_request_count'] = stats.get('cache_request_count', 0) + 1
+                    stats['last_cache_request_start'] = cache_start
                     if requests_without_media > 45:
                         raise _sg_parent_GridError('cache_request_limit')
                     if not 0 <= cache_start < 1 << 64:
                         raise _sg_parent_GridError('cache_frame_bounds')
                     send(52016, _sg_parent_struct.pack('<IQI', parent.quality, cache_start, 4294967295 if connection_requests == 1 else 6))
+                    cache_request_at = _sg_parent_time.monotonic()
+                    report('cache_request_sent')
                 elif frame.command == 51010:
                     if not live_started:
                         send(52011)
                         live_started = True
+                        if continuity.recovering:
+                            stats['catchup_state'] = 'unverified_live_boundary'
+                        report('live_push_transition_requested')
                 elif frame.command == 51016:
+                    if cache_request_at is not None and stats.get('cache_first_byte_ms') is None:
+                        stats['cache_first_byte_ms'] = round((_sg_parent_time.monotonic() - cache_request_at) * 1000, 3)
+                        report('cache_first_media_received')
+                    if continuity.recovering:
+                        stats['cache_frames_received'] += 1
+                        stats['recovery_media_bytes'] += len(frame.body)
                     if max_bytes is not None and stats['wire_bytes'] + len(frame.wire) > max_bytes:
                         stats['stop_reason'] = 'byte_limit'
                         report('grid_media_byte_limit_reached')
                         return
-                    chunk = _sg_parent_parse_media(frame.body)
+                    try:
+                        chunk = _sg_parent_parse_media(frame.body)
+                    except _sg_parent_GridError:
+                        stats.update(_sg_parent_layout_facts(frame.body))
+                        if hasattr(sink, 'reject'):
+                            sink.reject(frame)
+                        report('media_packet_rejected')
+                        raise
                     accepted = continuity.accept(chunk)
+                    if continuity.recovering and (not accepted) and (chunk.frame == continuity.last):
+                        overlap_started = cache_request_at if cache_request_at is not None else _sg_parent_time.monotonic()
+                        stats['overlap_verification_ms'] = round((_sg_parent_time.monotonic() - overlap_started) * 1000, 3)
+                        report('overlap_frame_verified')
                     sink.add(frame, discard=not accepted) if not accepted else sink.add(frame)
+                    last_media_at = _sg_parent_time.monotonic()
+                    stats['last_media_monotonic'] = last_media_at
+                    report('parent_last_media_received')
                     if accepted:
+                        was_recovering = continuity.recovering
                         continuity.committed()
+                        stats['last_media_monotonic'] = _sg_parent_time.monotonic()
+                        last_media_at = stats['last_media_monotonic']
                         packets_without_media = 0
                         requests_without_media = 0
                         attempts = 0
                         rediscoveries_this_outage = 0
-                        if live_started and resume_live_pending:
-                            report('grid_live_resumed')
-                            resume_live_pending = False
+                        if was_recovering:
+                            stats['cache_frames_replayed'] += 1
+                            if stats.get('first_new_frame_ms') is None:
+                                recovery_origin = recovery_started_at if recovery_started_at is not None else _sg_parent_time.monotonic()
+                                elapsed = (_sg_parent_time.monotonic() - recovery_origin) * 1000
+                                stats['first_new_frame_ms'] = round(elapsed, 3)
+                            if recovery_started_at is not None:
+                                stats['total_recovery_ms'] = round((_sg_parent_time.monotonic() - recovery_started_at) * 1000, 3)
+                            stats['recovery_success'] += 1
+                            report('first_new_frame_accepted')
+                            report('recovery_completed')
+                            stats.pop('recovery_failure_code', None)
+                            stats.pop('center_rediscovery_failed', None)
+                            recovery_started_at = recovery_failure_at = None
+                            stats['catchup_state'] = 'unverified_live_boundary'
                         quality = parent.quality
                         cache_start = chunk.frame + 1
                     last_media = _sg_parent_time.monotonic()
                     if stats['media_packets'] == 1:
                         report('parent_c748_media_received')
-                if _sg_parent_time.monotonic() - last_media > 6:
+                if _sg_parent_time.monotonic() - last_media >= _sg_parent_MEDIA_STALL_TIMEOUT:
                     raise _sg_parent_GridError('parent_media_stalled')
         except _sg_parent_Cancelled:
             raise
@@ -1452,13 +1790,37 @@ def _sg_parent_receive_media(network, parents, bno, node_key, sink, report, dura
             if str(exc) in ('network_read_timeout', 'capture_deadline_reached') and deadline is not None and (_sg_parent_time.monotonic() >= deadline):
                 if continuity.recovering:
                     continuity.reject('recovery_deadline_exhausted')
+                stats['stop_reason'] = 'duration_limit'
+                report('grid_duration_limit_reached')
                 return
             last_error = str(exc)
             if last_error not in _sg_parent_TRANSIENT:
+                if continuity.recovering:
+                    stats['recovery_failures'] += 1
+                    stats['recovery_failure_code'] = last_error
+                    report('recovery_failed')
                 raise
+            failure_now = _sg_parent_time.monotonic()
+            if recovery_started_at is None and continuity.last is not None:
+                if last_media_at is not None:
+                    stats['failure_detection_ms'] = round(max(0.0, failure_now - last_media_at) * 1000, 3)
+                recovery_started_at = failure_now
+                stats['recovery_started_monotonic'] = recovery_started_at
+                stats.pop('recovery_failure_code', None)
+                stats.pop('center_rediscovery_failed', None)
+                stats['first_new_frame_ms'] = None
+                stats['cache_first_byte_ms'] = None
+                stats['overlap_verification_ms'] = None
+                stats['catchup_state'] = 'not_started'
+                report('recovery_started')
+            recovery_failure_at = failure_now
+            stats['recovery_failure_attempts'] = stats.get('recovery_failure_attempts', 0) + 1
+            report('parent_failure_detected')
+            report(last_error)
             report('parent_connection_lost' if sock is not None else 'parent_candidate_failed')
             continuity.begin()
         finally:
+            stats['active_parents'] = 0
             if sock is not None:
                 network.release(sock)
 
@@ -1665,16 +2027,20 @@ def _sg_gateway_obtain_certificate(network, session, report):
         network.release(sock)
 
 
-# Module: stream; source SHA-256: 0d3c48ca9e7f077b88568c5894d015fb9fa8d732c4b04ff912304bc0454ee229
+# Module: stream; source SHA-256: 33a9902d0327c4f98a09a02f1e7bf1345a503e7c36bf50583b16a52e2fe78f24
 import threading as _sg_stream_threading
 import time as _sg_stream_time
 import logging as _sg_stream_logging
+from collections import deque as _sg_stream_deque
 from streamlink.exceptions import StreamError as _sg_stream_StreamError
 from streamlink.stream.stream import Stream as _sg_stream_Stream, StreamIO as _sg_stream_StreamIO
 _sg_stream_HTTP = _sg_auth_HTTP
 _sg_stream_bootstrap = _sg_bootstrap_bootstrap
 _sg_stream_discover_parent = _sg_center_discover_parent
 _sg_stream_obtain_certificate = _sg_gateway_obtain_certificate
+_sg_stream_Diagnostics = _sg_diagnostics_Diagnostics
+_sg_stream_safe_error = _sg_diagnostics_safe_error
+_sg_stream_stop_reason = _sg_diagnostics_stop_reason
 _sg_stream_MediaSink = _sg_media_MediaSink
 _sg_stream_receive_media = _sg_parent_receive_media
 _sg_stream_Cancelled = _sg_protocol_Cancelled
@@ -1717,7 +2083,8 @@ class _sg_stream_BoundedBuffer:
 
     def finish(self, error=None):
         with self.condition:
-            self.error = error
+            if self.error is None:
+                self.error = error
             self.eof = True
             self.condition.notify_all()
 
@@ -1754,19 +2121,29 @@ class _sg_stream_BoundedBuffer:
 
 def _sg_stream_receive(config, network, emit, report, stats):
     session = credentials = sink = None
+    primary = None
     try:
         session = _sg_stream_bootstrap(config, report, http_factory=lambda: _sg_stream_HTTP(network.stop))
         credentials = _sg_stream_obtain_certificate(network, session, report)
         parents, node_key = _sg_stream_discover_parent(network, session.center, credentials, report)
         sink = _sg_stream_MediaSink(emit, config.capture_dir)
+        stats.update(sink.stats)
+        sink.stats = stats
         _sg_stream_receive_media(network, parents, session.bno, node_key, sink, report, config.duration, config.max_bytes, rediscover=lambda: _sg_stream_discover_parent(network, session.center, credentials, report))
         if not sink.mux.video_frames:
             raise _sg_stream_GridError('no_playable_grid_video')
+    except BaseException as error:
+        primary = error
+        raise
     finally:
         try:
             if sink:
-                sink.close()
-                stats.update(sink.stats)
+                try:
+                    sink.close()
+                except Exception:
+                    if primary is None:
+                        raise
+                    report('cleanup_failed_after_primary_error')
         finally:
             if credentials:
                 credentials.clear()
@@ -1785,19 +2162,38 @@ class _sg_stream_SoopGridReader(_sg_stream_StreamIO):
         self.runner = runner
         self.thread = None
         self.stats = {}
-        self.stages = []
+        self.stages = _sg_stream_deque(maxlen=128)
         self._close_lock = _sg_stream_threading.Lock()
         self._closing = False
         self.failure_code = None
+        self.reader_state = 'initializing'
+        self.diagnostics = _sg_stream_Diagnostics(stream.config.diagnostics_dir, self._snapshot)
+
+    def _snapshot(self):
+        facts = dict(self.stats)
+        with self.buffer.condition:
+            facts.update(buffer_used_bytes=len(self.buffer.data), buffer_peak_bytes=self.buffer.peak_bytes)
+        with self.network._lock:
+            facts['active_sockets'] = len(self.network._sockets)
+        facts['reader_state'] = self.reader_state
+        return facts
+
+    def _report(self, event):
+        self.stages.append(event)
+        stage = next((x for x in ('bootstrap', 'gateway', 'center', 'parent') if event.startswith(x)), 'receiver')
+        self.diagnostics.event(stage, event)
 
     def open(self):
         if self.thread is not None or self.closed:
             raise _sg_stream_StreamError('Grid reader already opened or closed')
+        self.diagnostics.start()
         self.thread = _sg_stream_threading.Thread(target=self._run, name='soop-grid-receiver', daemon=True)
         self.thread.start()
         try:
             self.buffer.wait_ready()
         except Exception as error:
+            if not self.failure_code:
+                self.diagnostics.fail(_sg_stream_GridError('reader_timeout'))
             self.close()
             if self.failure_code and error is not None:
                 error.grid_error_code = self.failure_code
@@ -1807,15 +2203,21 @@ class _sg_stream_SoopGridReader(_sg_stream_StreamIO):
     def _run(self):
         error = None
         try:
-            self.runner(self.stream.config, self.network, self.buffer.put, self.stages.append, self.stats)
-        except Exception as exc:
-            code = str(exc) if isinstance(exc, _sg_stream_GridError) else 'receiver_internal_failure'
+            self.runner(self.stream.config, self.network, self.buffer.put, self._report, self.stats)
+            self.diagnostics.complete(self.stats.get('stop_reason', 'receiver_completed_unknown'))
+        except BaseException as exc:
+            code = _sg_stream_safe_error(exc)
             self.failure_code = code
+            reason = 'center_rediscovery_failed' if self.stats.get('center_rediscovery_failed') and _sg_stream_stop_reason(exc) != 'authentication_denied' else None
+            self.diagnostics.fail(exc, reason)
             if not self._closing:
                 error = _sg_stream_StreamError('SOOP Grid: ' + code)
+                _sg_stream__log.error('Native Grid receiver stopped: %s (%s)', code, self.diagnostics.reason)
         finally:
             self.network.close()
             self.buffer.finish(error)
+            self.diagnostics.event(event='worker_finished')
+            self.diagnostics.summary()
 
     def readable(self):
         return not self.closed
@@ -1824,8 +2226,18 @@ class _sg_stream_SoopGridReader(_sg_stream_StreamIO):
         if self.closed or self._closing:
             return b''
         try:
-            return self.buffer.read(size)
+            result = self.buffer.read(size)
+            if result:
+                self.reader_state = 'streaming'
+            elif size != 0:
+                self.reader_state = 'eof'
+                self.diagnostics.event('reader', 'reader_eof')
+            return result
         except _sg_stream_StreamError as exc:
+            self.reader_state = 'error'
+            if not self.failure_code:
+                self.diagnostics.fail(_sg_stream_GridError('reader_timeout'))
+            self.diagnostics.event('reader', 'reader_error')
             self.close()
             raise OSError(str(exc)) from None
 
@@ -1838,12 +2250,17 @@ class _sg_stream_SoopGridReader(_sg_stream_StreamIO):
         with self._close_lock:
             if self.closed:
                 return
+            if self.thread and self.thread.is_alive() and (self.diagnostics.reason is None):
+                self.diagnostics.complete('user_cancelled')
             self._closing = True
             self.network.close()
             self.buffer.close()
         if self.thread and self.thread is not _sg_stream_threading.current_thread():
             self.thread.join(12)
         self.stream.config.clear()
+        self.reader_state = 'closed'
+        self.diagnostics.event('reader', 'reader_closed')
+        self.diagnostics.close()
         super().close()
 
 class _sg_stream_SoopGridStream(_sg_stream_Stream):
@@ -1860,7 +2277,10 @@ class _sg_stream_SoopGridStream(_sg_stream_Stream):
         if self._opened:
             raise _sg_stream_StreamError('Grid streams are single-session; enumerate again to reopen')
         self._opened = True
-        return _sg_stream_SoopGridReader(self).open()
+        try:
+            return _sg_stream_SoopGridReader(self).open()
+        except _sg_stream_GridError as exc:
+            raise _sg_stream_StreamError('SOOP Grid: ' + _sg_stream_safe_error(exc)) from None
 
 class _sg_stream_OfficialHLSFallback:
     """Lazy, one-shot delegation to Streamlink's maintained SOOP plugin."""
@@ -1927,7 +2347,7 @@ class _sg_stream_SoopAutoStream(_sg_stream_Stream):
                 self.fallback.clear()
 
 
-# Module: plugin; source SHA-256: 4c21c40ecd22e47cef27e5ddd37dd2f4cbea5b43b1a85892df87ec5af7690513
+# Module: plugin; source SHA-256: bbb176e0400e8507543479dfd148d7151a2f7ac7569de8ca69d648e8b56db3b6
 import os as _sg_plugin_os
 import re as _sg_plugin_re
 import logging as _sg_plugin_logging
@@ -1954,6 +2374,7 @@ def _sg_plugin_official_hls_streams(session, url, account, password, stream_pass
 @_sg_plugin_pluginargument('grid-require-adult', action='store_true', argument_name='soop-grid-require-adult', help='Require the authenticated live API adult check.')
 @_sg_plugin_pluginargument('grid-duration', type=int, argument_name='soop-grid-duration', help='Optional Grid capture limit in seconds; omit to record until stopped.')
 @_sg_plugin_pluginargument('grid-max-bytes', type=int, argument_name='soop-grid-max-bytes', help='Optional maximum Grid wire bytes; omit for no lifetime byte cap.')
+@_sg_plugin_pluginargument('grid-diagnostics', argument_name='soop-grid-diagnostics', help='Create a new private directory for redacted diagnostics and atomic summary.')
 @_sg_plugin_pluginargument('grid-stream-password', sensitive=True, argument_name='soop-grid-stream-password', help='Broadcast password. Prefer SOOP_STREAM_PASSWORD to avoid shell history.')
 class _sg_plugin_SoopGridPlugin(_sg_plugin_Plugin):
 
@@ -1971,7 +2392,7 @@ class _sg_plugin_SoopGridPlugin(_sg_plugin_Plugin):
                 raise _sg_plugin_PluginError('The official SOOP plugin returned no HLS streams')
             yield from hls_streams.items()
             return
-        config = _sg_plugin_Config(broadcaster=self.match['channel'], bno=self.match['bno'], account=account, account_password=account_password, stream_password=stream_password, require_adult=bool(self.get_option('grid-require-adult')), duration=self.get_option('grid-duration'), max_bytes=self.get_option('grid-max-bytes'), capture_dir=_sg_plugin_os.environ.get('SOOP_GRID_CAPTURE_DIR') or None)
+        config = _sg_plugin_Config(broadcaster=self.match['channel'], bno=self.match['bno'], account=account, account_password=account_password, stream_password=stream_password, require_adult=bool(self.get_option('grid-require-adult')), duration=self.get_option('grid-duration'), max_bytes=self.get_option('grid-max-bytes'), capture_dir=_sg_plugin_os.environ.get('SOOP_GRID_CAPTURE_DIR') or None, diagnostics_dir=self.get_option('grid-diagnostics') or _sg_plugin_os.environ.get('SOOP_GRID_DIAGNOSTICS_DIR') or None)
         try:
             config.validate()
         except _sg_plugin_GridError as exc:
@@ -1989,4 +2410,4 @@ _sg_plugin___plugin__ = _sg_plugin_SoopGridPlugin
 __plugin__ = _sg_plugin___plugin__
 
 
-__grid_names__ = {'auth': {'json': '_sg_auth_json', 're': '_sg_auth_re', 'SimpleCookie': '_sg_auth_SimpleCookie', 'urlsplit': '_sg_auth_urlsplit', 'requests': '_sg_auth_requests', 'GridError': '_sg_auth_GridError', 'PLAY': '_sg_auth_PLAY', 'LIVE': '_sg_auth_LIVE', 'UA': '_sg_auth_UA', 'ALLOWED': '_sg_auth_ALLOWED', 'identifier': '_sg_auth_identifier', 'HTTP': '_sg_auth_HTTP'}, 'bootstrap': {'re': '_sg_bootstrap_re', 'dataclass': '_sg_bootstrap_dataclass', 'field': '_sg_bootstrap_field', 'HTTP': '_sg_bootstrap_HTTP', 'LIVE': '_sg_bootstrap_LIVE', 'PLAY': '_sg_bootstrap_PLAY', 'identifier': '_sg_bootstrap_identifier', 'GridError': '_sg_bootstrap_GridError', 'endpoint': '_sg_bootstrap_endpoint', 'Config': '_sg_bootstrap_Config', 'Session': '_sg_bootstrap_Session', 'affirmative_no': '_sg_bootstrap_affirmative_no', 'bootstrap': '_sg_bootstrap_bootstrap'}, 'center': {'hmac': '_sg_center_hmac', 'json': '_sg_center_json', 're': '_sg_center_re', 'struct': '_sg_center_struct', 'time': '_sg_center_time', 'dataclass': '_sg_center_dataclass', 'field': '_sg_center_field', 'AUTH_IV': '_sg_center_AUTH_IV', 'AUTH_KEY': '_sg_center_AUTH_KEY', 'PREFIX': '_sg_center_PREFIX', 'SALT': '_sg_center_SALT', 'ctr': '_sg_center_ctr', 'mixed_header': '_sg_center_mixed_header', 'pad16': '_sg_center_pad16', 'wire_hash': '_sg_center_wire_hash', 'GridError': '_sg_center_GridError', 'center_packet': '_sg_center_center_packet', 'read_frame': '_sg_center_read_frame', 'ADJUST': '_sg_center_ADJUST', 'JOINLOG': '_sg_center_JOINLOG', 'valid_seed': '_sg_center_valid_seed', 'Credentials': '_sg_center_Credentials', 'auth_body': '_sg_center_auth_body', 'join_body': '_sg_center_join_body', 'json_body': '_sg_center_json_body', 'discover_parent': '_sg_center_discover_parent'}, 'crypto': {'struct': '_sg_crypto_struct', 'AES': '_sg_crypto_AES', 'MASK': '_sg_crypto_MASK', 'leftWords': '_sg_crypto_leftWords', 'rightWords': '_sg_crypto_rightWords', 'leftShifts': '_sg_crypto_leftShifts', 'rightShifts': '_sg_crypto_rightShifts', '_boolean': '_sg_crypto__boolean', '_block': '_sg_crypto__block', 'wire_hash': '_sg_crypto_wire_hash', 'pad16': '_sg_crypto_pad16', 'ctr': '_sg_crypto_ctr', 'PREFIX': '_sg_crypto_PREFIX', 'SALT': '_sg_crypto_SALT', 'SERVICE_KEY': '_sg_crypto_SERVICE_KEY', 'SERVICE_IV': '_sg_crypto_SERVICE_IV', 'AUTH_KEY': '_sg_crypto_AUTH_KEY', 'AUTH_IV': '_sg_crypto_AUTH_IV', 'mixed_header': '_sg_crypto_mixed_header', 'service6': '_sg_crypto_service6'}, 'gateway': {'secrets': '_sg_gateway_secrets', 'struct': '_sg_gateway_struct', 'time': '_sg_gateway_time', 'service6': '_sg_gateway_service6', 'GridError': '_sg_gateway_GridError', 'gateway_packet': '_sg_gateway_gateway_packet', 'read_frame': '_sg_gateway_read_frame', 'login_packet': '_sg_gateway_login_packet', 'certificate_packet': '_sg_gateway_certificate_packet', 'validate_login': '_sg_gateway_validate_login', 'obtain_certificate': '_sg_gateway_obtain_certificate'}, 'h264clock': {'dataclass': '_sg_h264clock_dataclass', 'Fraction': '_sg_h264clock_Fraction', 'nals': '_sg_h264clock_nals', 'GridError': '_sg_h264clock_GridError', 'Reader': '_sg_h264clock_Reader', 'rbsp': '_sg_h264clock_rbsp', 'skip_scaling_list': '_sg_h264clock_skip_scaling_list', 'skip_hrd': '_sg_h264clock_skip_hrd', '_MAX_DPB_MBS': '_sg_h264clock__MAX_DPB_MBS', 'inferred_reorder': '_sg_h264clock_inferred_reorder', 'parse_sps': '_sg_h264clock_parse_sps', 'parse_vui': '_sg_h264clock_parse_vui', 'parse_pps': '_sg_h264clock_parse_pps', 'Picture': '_sg_h264clock_Picture', 'parse_slice': '_sg_h264clock_parse_slice', 'H264Clock': '_sg_h264clock_H264Clock'}, 'media': {'hashlib': '_sg_media_hashlib', 'json': '_sg_media_json', 'os': '_sg_media_os', 'struct': '_sg_media_struct', 'dataclass': '_sg_media_dataclass', 'field': '_sg_media_field', 'Path': '_sg_media_Path', 'H264Clock': '_sg_media_H264Clock', 'TSMux': '_sg_media_TSMux', 'nals': '_sg_media_nals', 'GridError': '_sg_media_GridError', 'Chunk': '_sg_media_Chunk', 'parse_media': '_sg_media_parse_media', 'Bits': '_sg_media_Bits', 'sps_info': '_sg_media_sps_info', 'adts_info': '_sg_media_adts_info', 'MediaSink': '_sg_media_MediaSink'}, 'mpegts': {'struct': '_sg_mpegts_struct', 'GridError': '_sg_mpegts_GridError', 'nals': '_sg_mpegts_nals', 'has_nal': '_sg_mpegts_has_nal', 'crc_mpeg': '_sg_mpegts_crc_mpeg', 'pts_bytes': '_sg_mpegts_pts_bytes', 'TSMux': '_sg_mpegts_TSMux'}, 'parent': {'json': '_sg_parent_json', 'struct': '_sg_parent_struct', 'time': '_sg_parent_time', 'dataclass': '_sg_parent_dataclass', 'parse_media': '_sg_parent_parse_media', 'Continuity': '_sg_parent_Continuity', 'Cancelled': '_sg_parent_Cancelled', 'GridError': '_sg_parent_GridError', 'endpoint': '_sg_parent_endpoint', 'parent_packet': '_sg_parent_parent_packet', 'read_frame': '_sg_parent_read_frame', 'Parent': '_sg_parent_Parent', 'parse_parents': '_sg_parent_parse_parents', 'TRANSIENT': '_sg_parent_TRANSIENT', 'receive_media': '_sg_parent_receive_media'}, 'protocol': {'ipaddress': '_sg_protocol_ipaddress', 'socket': '_sg_protocol_socket', 'struct': '_sg_protocol_struct', 'threading': '_sg_protocol_threading', 'time': '_sg_protocol_time', 'dataclass': '_sg_protocol_dataclass', 'field': '_sg_protocol_field', 'GridError': '_sg_protocol_GridError', 'Cancelled': '_sg_protocol_Cancelled', 'endpoint': '_sg_protocol_endpoint', 'Frame': '_sg_protocol_Frame', 'gateway_packet': '_sg_protocol_gateway_packet', 'center_packet': '_sg_protocol_center_packet', 'parent_packet': '_sg_protocol_parent_packet', 'read_exact': '_sg_protocol_read_exact', 'read_frame': '_sg_protocol_read_frame', 'Network': '_sg_protocol_Network'}, 'recovery': {'hashlib': '_sg_recovery_hashlib', 'OrderedDict': '_sg_recovery_OrderedDict', 'GridError': '_sg_recovery_GridError', 'Continuity': '_sg_recovery_Continuity'}, 'stream': {'threading': '_sg_stream_threading', 'time': '_sg_stream_time', 'logging': '_sg_stream_logging', 'StreamError': '_sg_stream_StreamError', 'Stream': '_sg_stream_Stream', 'StreamIO': '_sg_stream_StreamIO', 'HTTP': '_sg_stream_HTTP', 'bootstrap': '_sg_stream_bootstrap', 'discover_parent': '_sg_stream_discover_parent', 'obtain_certificate': '_sg_stream_obtain_certificate', 'MediaSink': '_sg_stream_MediaSink', 'receive_media': '_sg_stream_receive_media', 'Cancelled': '_sg_stream_Cancelled', 'GridError': '_sg_stream_GridError', 'Network': '_sg_stream_Network', '_log': '_sg_stream__log', '_INITIAL_TRANSPORT_FAILURES': '_sg_stream__INITIAL_TRANSPORT_FAILURES', 'BoundedBuffer': '_sg_stream_BoundedBuffer', 'receive': '_sg_stream_receive', 'SoopGridReader': '_sg_stream_SoopGridReader', 'SoopGridStream': '_sg_stream_SoopGridStream', 'OfficialHLSFallback': '_sg_stream_OfficialHLSFallback', 'SoopAutoStream': '_sg_stream_SoopAutoStream'}, 'plugin': {'os': '_sg_plugin_os', 're': '_sg_plugin_re', 'logging': '_sg_plugin_logging', 'PluginError': '_sg_plugin_PluginError', 'Plugin': '_sg_plugin_Plugin', 'pluginargument': '_sg_plugin_pluginargument', 'pluginmatcher': '_sg_plugin_pluginmatcher', 'Config': '_sg_plugin_Config', 'GridError': '_sg_plugin_GridError', 'OfficialHLSFallback': '_sg_plugin_OfficialHLSFallback', 'SoopAutoStream': '_sg_plugin_SoopAutoStream', 'SoopGridStream': '_sg_plugin_SoopGridStream', 'log': '_sg_plugin_log', 'official_hls_streams': '_sg_plugin_official_hls_streams', 'SoopGridPlugin': '_sg_plugin_SoopGridPlugin', '__plugin__': '_sg_plugin___plugin__'}}
+__grid_names__ = {'auth': {'json': '_sg_auth_json', 're': '_sg_auth_re', 'SimpleCookie': '_sg_auth_SimpleCookie', 'urlsplit': '_sg_auth_urlsplit', 'requests': '_sg_auth_requests', 'GridError': '_sg_auth_GridError', 'PLAY': '_sg_auth_PLAY', 'LIVE': '_sg_auth_LIVE', 'UA': '_sg_auth_UA', 'ALLOWED': '_sg_auth_ALLOWED', 'identifier': '_sg_auth_identifier', 'HTTP': '_sg_auth_HTTP'}, 'bootstrap': {'re': '_sg_bootstrap_re', 'dataclass': '_sg_bootstrap_dataclass', 'field': '_sg_bootstrap_field', 'HTTP': '_sg_bootstrap_HTTP', 'LIVE': '_sg_bootstrap_LIVE', 'PLAY': '_sg_bootstrap_PLAY', 'identifier': '_sg_bootstrap_identifier', 'GridError': '_sg_bootstrap_GridError', 'endpoint': '_sg_bootstrap_endpoint', 'Config': '_sg_bootstrap_Config', 'Session': '_sg_bootstrap_Session', 'affirmative_no': '_sg_bootstrap_affirmative_no', 'bootstrap': '_sg_bootstrap_bootstrap'}, 'center': {'hmac': '_sg_center_hmac', 'json': '_sg_center_json', 're': '_sg_center_re', 'struct': '_sg_center_struct', 'time': '_sg_center_time', 'dataclass': '_sg_center_dataclass', 'field': '_sg_center_field', 'AUTH_IV': '_sg_center_AUTH_IV', 'AUTH_KEY': '_sg_center_AUTH_KEY', 'PREFIX': '_sg_center_PREFIX', 'SALT': '_sg_center_SALT', 'ctr': '_sg_center_ctr', 'mixed_header': '_sg_center_mixed_header', 'pad16': '_sg_center_pad16', 'wire_hash': '_sg_center_wire_hash', 'GridError': '_sg_center_GridError', 'center_packet': '_sg_center_center_packet', 'read_frame': '_sg_center_read_frame', 'ADJUST': '_sg_center_ADJUST', 'JOINLOG': '_sg_center_JOINLOG', 'valid_seed': '_sg_center_valid_seed', 'Credentials': '_sg_center_Credentials', 'auth_body': '_sg_center_auth_body', 'join_body': '_sg_center_join_body', 'json_body': '_sg_center_json_body', 'discover_parent': '_sg_center_discover_parent'}, 'crypto': {'struct': '_sg_crypto_struct', 'AES': '_sg_crypto_AES', 'MASK': '_sg_crypto_MASK', 'leftWords': '_sg_crypto_leftWords', 'rightWords': '_sg_crypto_rightWords', 'leftShifts': '_sg_crypto_leftShifts', 'rightShifts': '_sg_crypto_rightShifts', '_boolean': '_sg_crypto__boolean', '_block': '_sg_crypto__block', 'wire_hash': '_sg_crypto_wire_hash', 'pad16': '_sg_crypto_pad16', 'ctr': '_sg_crypto_ctr', 'PREFIX': '_sg_crypto_PREFIX', 'SALT': '_sg_crypto_SALT', 'SERVICE_KEY': '_sg_crypto_SERVICE_KEY', 'SERVICE_IV': '_sg_crypto_SERVICE_IV', 'AUTH_KEY': '_sg_crypto_AUTH_KEY', 'AUTH_IV': '_sg_crypto_AUTH_IV', 'mixed_header': '_sg_crypto_mixed_header', 'service6': '_sg_crypto_service6'}, 'diagnostics': {'errno': '_sg_diagnostics_errno', 'json': '_sg_diagnostics_json', 'logging': '_sg_diagnostics_logging', 'math': '_sg_diagnostics_math', 'os': '_sg_diagnostics_os', 'Path': '_sg_diagnostics_Path', 'threading': '_sg_diagnostics_threading', 'time': '_sg_diagnostics_time', 'Cancelled': '_sg_diagnostics_Cancelled', 'GridError': '_sg_diagnostics_GridError', '_log': '_sg_diagnostics__log', 'EVENTS': '_sg_diagnostics_EVENTS', 'NUMERIC_FIELDS': '_sg_diagnostics_NUMERIC_FIELDS', 'safe_error': '_sg_diagnostics_safe_error', 'STOP_REASONS': '_sg_diagnostics_STOP_REASONS', 'TRACE_FUNCTIONS': '_sg_diagnostics_TRACE_FUNCTIONS', 'safe_sites': '_sg_diagnostics_safe_sites', 'stop_reason': '_sg_diagnostics_stop_reason', 'Diagnostics': '_sg_diagnostics_Diagnostics', 'ERROR_CODES': '_sg_diagnostics_ERROR_CODES'}, 'gateway': {'secrets': '_sg_gateway_secrets', 'struct': '_sg_gateway_struct', 'time': '_sg_gateway_time', 'service6': '_sg_gateway_service6', 'GridError': '_sg_gateway_GridError', 'gateway_packet': '_sg_gateway_gateway_packet', 'read_frame': '_sg_gateway_read_frame', 'login_packet': '_sg_gateway_login_packet', 'certificate_packet': '_sg_gateway_certificate_packet', 'validate_login': '_sg_gateway_validate_login', 'obtain_certificate': '_sg_gateway_obtain_certificate'}, 'h264clock': {'dataclass': '_sg_h264clock_dataclass', 'Fraction': '_sg_h264clock_Fraction', 'nals': '_sg_h264clock_nals', 'GridError': '_sg_h264clock_GridError', 'Reader': '_sg_h264clock_Reader', 'rbsp': '_sg_h264clock_rbsp', 'skip_scaling_list': '_sg_h264clock_skip_scaling_list', 'skip_hrd': '_sg_h264clock_skip_hrd', '_MAX_DPB_MBS': '_sg_h264clock__MAX_DPB_MBS', 'inferred_reorder': '_sg_h264clock_inferred_reorder', 'parse_sps': '_sg_h264clock_parse_sps', 'parse_vui': '_sg_h264clock_parse_vui', 'parse_pps': '_sg_h264clock_parse_pps', 'Picture': '_sg_h264clock_Picture', 'parse_slice': '_sg_h264clock_parse_slice', 'H264Clock': '_sg_h264clock_H264Clock'}, 'media': {'hashlib': '_sg_media_hashlib', 'json': '_sg_media_json', 'os': '_sg_media_os', 'struct': '_sg_media_struct', 'dataclass': '_sg_media_dataclass', 'field': '_sg_media_field', 'Path': '_sg_media_Path', 'H264Clock': '_sg_media_H264Clock', 'TSMux': '_sg_media_TSMux', 'nals': '_sg_media_nals', 'GridError': '_sg_media_GridError', 'Chunk': '_sg_media_Chunk', 'layout_facts': '_sg_media_layout_facts', 'parse_media': '_sg_media_parse_media', 'Bits': '_sg_media_Bits', 'sps_info': '_sg_media_sps_info', 'adts_info': '_sg_media_adts_info', 'MediaSink': '_sg_media_MediaSink'}, 'mpegts': {'struct': '_sg_mpegts_struct', 'GridError': '_sg_mpegts_GridError', 'nals': '_sg_mpegts_nals', 'has_nal': '_sg_mpegts_has_nal', 'crc_mpeg': '_sg_mpegts_crc_mpeg', 'pts_bytes': '_sg_mpegts_pts_bytes', 'TSMux': '_sg_mpegts_TSMux'}, 'parent': {'json': '_sg_parent_json', 'struct': '_sg_parent_struct', 'time': '_sg_parent_time', 'dataclass': '_sg_parent_dataclass', 'layout_facts': '_sg_parent_layout_facts', 'parse_media': '_sg_parent_parse_media', 'Continuity': '_sg_parent_Continuity', 'Cancelled': '_sg_parent_Cancelled', 'GridError': '_sg_parent_GridError', 'endpoint': '_sg_parent_endpoint', 'parent_packet': '_sg_parent_parent_packet', 'read_frame': '_sg_parent_read_frame', 'MEDIA_STALL_TIMEOUT': '_sg_parent_MEDIA_STALL_TIMEOUT', 'FAILOVER_BACKOFF_SECONDS': '_sg_parent_FAILOVER_BACKOFF_SECONDS', 'MAX_PARENT_ATTEMPTS_PER_OUTAGE': '_sg_parent_MAX_PARENT_ATTEMPTS_PER_OUTAGE', 'MAX_CENTER_REDISCOVERIES_PER_OUTAGE': '_sg_parent_MAX_CENTER_REDISCOVERIES_PER_OUTAGE', 'Parent': '_sg_parent_Parent', 'parse_parents': '_sg_parent_parse_parents', 'TRANSIENT': '_sg_parent_TRANSIENT', 'receive_media': '_sg_parent_receive_media'}, 'protocol': {'ipaddress': '_sg_protocol_ipaddress', 'socket': '_sg_protocol_socket', 'struct': '_sg_protocol_struct', 'threading': '_sg_protocol_threading', 'time': '_sg_protocol_time', 'dataclass': '_sg_protocol_dataclass', 'field': '_sg_protocol_field', 'GridError': '_sg_protocol_GridError', 'Cancelled': '_sg_protocol_Cancelled', 'endpoint': '_sg_protocol_endpoint', 'Frame': '_sg_protocol_Frame', 'gateway_packet': '_sg_protocol_gateway_packet', 'center_packet': '_sg_protocol_center_packet', 'parent_packet': '_sg_protocol_parent_packet', 'read_exact': '_sg_protocol_read_exact', 'read_frame': '_sg_protocol_read_frame', 'Network': '_sg_protocol_Network'}, 'recovery': {'hashlib': '_sg_recovery_hashlib', 'OrderedDict': '_sg_recovery_OrderedDict', 'GridError': '_sg_recovery_GridError', 'Continuity': '_sg_recovery_Continuity'}, 'stream': {'threading': '_sg_stream_threading', 'time': '_sg_stream_time', 'logging': '_sg_stream_logging', 'deque': '_sg_stream_deque', 'StreamError': '_sg_stream_StreamError', 'Stream': '_sg_stream_Stream', 'StreamIO': '_sg_stream_StreamIO', 'HTTP': '_sg_stream_HTTP', 'bootstrap': '_sg_stream_bootstrap', 'discover_parent': '_sg_stream_discover_parent', 'obtain_certificate': '_sg_stream_obtain_certificate', 'Diagnostics': '_sg_stream_Diagnostics', 'safe_error': '_sg_stream_safe_error', 'stop_reason': '_sg_stream_stop_reason', 'MediaSink': '_sg_stream_MediaSink', 'receive_media': '_sg_stream_receive_media', 'Cancelled': '_sg_stream_Cancelled', 'GridError': '_sg_stream_GridError', 'Network': '_sg_stream_Network', '_log': '_sg_stream__log', '_INITIAL_TRANSPORT_FAILURES': '_sg_stream__INITIAL_TRANSPORT_FAILURES', 'BoundedBuffer': '_sg_stream_BoundedBuffer', 'receive': '_sg_stream_receive', 'SoopGridReader': '_sg_stream_SoopGridReader', 'SoopGridStream': '_sg_stream_SoopGridStream', 'OfficialHLSFallback': '_sg_stream_OfficialHLSFallback', 'SoopAutoStream': '_sg_stream_SoopAutoStream'}, 'plugin': {'os': '_sg_plugin_os', 're': '_sg_plugin_re', 'logging': '_sg_plugin_logging', 'PluginError': '_sg_plugin_PluginError', 'Plugin': '_sg_plugin_Plugin', 'pluginargument': '_sg_plugin_pluginargument', 'pluginmatcher': '_sg_plugin_pluginmatcher', 'Config': '_sg_plugin_Config', 'GridError': '_sg_plugin_GridError', 'OfficialHLSFallback': '_sg_plugin_OfficialHLSFallback', 'SoopAutoStream': '_sg_plugin_SoopAutoStream', 'SoopGridStream': '_sg_plugin_SoopGridStream', 'log': '_sg_plugin_log', 'official_hls_streams': '_sg_plugin_official_hls_streams', 'SoopGridPlugin': '_sg_plugin_SoopGridPlugin', '__plugin__': '_sg_plugin___plugin__'}}

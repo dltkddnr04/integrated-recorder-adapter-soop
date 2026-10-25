@@ -20,6 +20,18 @@ class Chunk:
     kind: str
     timestamp: int
     payload: bytes = field(repr=False)
+    extension_bytes: int = 0
+
+
+def layout_facts(body):
+    facts = {"rejected_body_bytes": len(body)}
+    if len(body) >= 12:
+        facts.update(
+            rejected_header_bytes=struct.unpack_from("<H", body, 2)[0],
+            rejected_extension_bytes=struct.unpack_from("<I", body, 4)[0],
+            rejected_payload_bytes=struct.unpack_from("<I", body, 8)[0],
+        )
+    return facts
 
 
 def parse_media(body):
@@ -27,17 +39,22 @@ def parse_media(body):
         raise GridError("media_header_short")
     header = struct.unpack_from("<H", body, 2)[0]
     extension, size = struct.unpack_from("<II", body, 4)
-    if not 69 <= header <= 4096 or extension or size < 1 or header + size != len(body):
+    # Live extended I-frame: 69-byte header + 50-byte opaque metadata + Annex-B.
+    # Both lengths are validated before locating the unchanged encoded payload.
+    start = header + extension
+    if not 69 <= header <= 4096 or extension > 4096 or size < 1 or start + size != len(body):
         raise GridError("media_layout_unconfirmed")
     kind = chr(body[40])
     if kind not in ("I", "P", "B", "A"):
         raise GridError("media_kind_unconfirmed")
-    payload = body[header:]
+    payload = body[start:]
     if kind in ("I", "P", "B") and (len(payload) < 4 or payload[:2] != b"\0\0"):
         raise GridError("video_prefix_unconfirmed")
     if kind == "A" and (len(payload) < 7 or payload[0] != 255 or payload[1] & 240 != 240):
         raise GridError("audio_prefix_unconfirmed")
-    return Chunk(struct.unpack_from("<Q", body, 12)[0], kind, struct.unpack_from("<Q", body, 41)[0], payload)
+    return Chunk(
+        struct.unpack_from("<Q", body, 12)[0], kind, struct.unpack_from("<Q", body, 41)[0], payload, extension
+    )
 
 
 class Bits:
@@ -185,6 +202,8 @@ class MediaSink:
             "video_frames": 0,
             "audio_frames": 0,
             "sequence_discontinuities": 0,
+            "extended_media_packets": 0,
+            "media_extension_bytes": 0,
         }
         self.payload_hash = hashlib.sha256()
         self.last_frame = None
@@ -210,6 +229,18 @@ class MediaSink:
         if name in self.files:
             self.files[name].write(data)
 
+    def reject(self, frame):
+        # Explicit raw-capture opt-in only. Diagnostics never contain packet bytes.
+        if self.owns_directory:
+            try:
+                fd = os.open(
+                    self.path / "rejected-grid-wire.bin", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
+                )
+                with os.fdopen(fd, "wb") as out:
+                    out.write(frame.wire)
+            except OSError:
+                self.stats["rejected_packet_preservation_failed"] = 1
+
     def add(self, frame, discard=False):
         chunk = parse_media(frame.body)
         self.write("grid-wire.bin", frame.wire)
@@ -218,6 +249,9 @@ class MediaSink:
         self.stats["media_packets"] += 1
         self.stats["payload_bytes"] += len(chunk.payload)
         self.stats["wire_bytes"] += len(frame.wire)
+        if chunk.extension_bytes:
+            self.stats["extended_media_packets"] += 1
+            self.stats["media_extension_bytes"] += chunk.extension_bytes
         if discard:
             return chunk  # Preserve received raw bytes, but never replay duplicate ES/TS.
         if self.last_frame is not None and chunk.frame != self.last_frame + 1:

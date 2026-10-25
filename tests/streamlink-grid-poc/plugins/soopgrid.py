@@ -81,6 +81,11 @@ def official_hls_streams(session, url, account, password, stream_password):
     help="Optional maximum Grid wire bytes; omit for no lifetime byte cap.",
 )
 @pluginargument(
+    "grid-diagnostics",
+    argument_name="soop-grid-diagnostics",
+    help="Create a new private directory for redacted diagnostics and atomic summary.",
+)
+@pluginargument(
     "grid-stream-password",
     sensitive=True,
     argument_name="soop-grid-stream-password",
@@ -116,6 +121,9 @@ class SoopGridPlugin(Plugin):
             duration=self.get_option("grid-duration"),
             max_bytes=self.get_option("grid-max-bytes"),
             capture_dir=os.environ.get("SOOP_GRID_CAPTURE_DIR") or None,
+            diagnostics_dir=self.get_option("grid-diagnostics")
+            or os.environ.get("SOOP_GRID_DIAGNOSTICS_DIR")
+            or None,
         )
         try:
             config.validate()

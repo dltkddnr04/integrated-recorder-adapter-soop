@@ -26,6 +26,9 @@ class Continuity:
             "gap_events",
             "recovered_ranges",
             "unrecoverable_ranges",
+            "overlap_duplicates_discarded",
+            "missing_frames",
+            "frame_identity_conflicts",
         ):
             stats.setdefault(name, 0)
 
@@ -38,6 +41,12 @@ class Continuity:
             self.report("grid_frame_gap_detected")
 
     def reject(self, code):
+        if self.recovering:
+            self.stats["recovery_failure_code"] = code
+        if code == "frame_identity_conflict":
+            self.stats["frame_identity_conflicts"] += 1
+        elif code in ("frame_sequence_gap_or_reset", "recovery_overlap_unavailable"):
+            self.stats["recovery_failure_code"] = code
         if not self.recovering:
             self.stats["gap_events"] += 1
             self.report("grid_frame_gap_detected")
@@ -52,12 +61,15 @@ class Continuity:
                 self.reject("frame_identity_conflict")
             if self.recovering and chunk.frame == self.last:
                 self.anchor = True
+                self.stats["overlap_duplicates_discarded"] += 1
             self.stats["duplicate_frames_excluded"] += 1
             return False
         if self.last is not None:
             if self.recovering and not self.anchor:
                 self.reject("recovery_overlap_unavailable")
             if chunk.frame != self.last + 1:
+                if self.last < chunk.frame < (1 << 64):
+                    self.stats["missing_frames"] += chunk.frame - self.last - 1
                 self.reject("frame_sequence_gap_or_reset")
         # Per elementary-stream timestamps: audio/video interleaving need not be ordered.
         kind = "video" if chunk.kind in ("I", "P", "B") else chunk.kind
@@ -68,12 +80,12 @@ class Continuity:
         if len(self.recent) > 128:
             self.recent.popitem(last=False)
         self.last = chunk.frame
-        self.stats["last_normal_frame"] = chunk.frame
         self.pending_resume = self.recovering
         return True
 
     def committed(self):
         # Called only AFTER accepted payload/TS has been written successfully.
+        self.stats["last_normal_frame"] = self.last
         if self.pending_resume:
             self.pending_resume = self.recovering = False
             self.stats["recovered_ranges"] += 1

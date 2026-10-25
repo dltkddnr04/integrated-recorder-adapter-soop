@@ -67,6 +67,14 @@ def test_negative_gateway_frame():
         right.close()
 
 
+def test_read_frame_closed_socket_is_transient_network_error():
+    left, right = socket.socketpair()
+    right.close()
+    left.close()
+    with pytest.raises(GridError, match="network_read_failed"):
+        read_frame(left, "parent")
+
+
 @pytest.mark.parametrize(
     "host,port",
     [
