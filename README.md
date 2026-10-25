@@ -56,6 +56,10 @@ GOWORK=off go build -o integrated-recorder-adapter-soop ./cmd/integrated-recorde
 
 이 저장소는 [Adapter SDK for Go](https://github.com/integrated-recorder/adapter-sdk-go)를 사용합니다. 배포 상태와 release는 [Plugin Registry](https://github.com/integrated-recorder/plugin-registry)에서 확인하세요. 현재 stable official Registry 배포는 없습니다.
 
+## 실험적 Native Grid PoC
+
+독립 Go Grid 수신 연구와 합성 fixture 테스트는 [tests/grid-poc](tests/grid-poc/README.md)에 있습니다. 기존 Adapter Protocol v1 플러그인과 분리된 실험 코드이며 운영 어댑터에 통합되지 않았습니다.
+
 ## 생태계와 라이선스
 
 - [Integrated Recorder Core](https://github.com/integrated-recorder/core) — recording과 canonical archive

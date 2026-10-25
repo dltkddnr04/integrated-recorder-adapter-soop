@@ -56,6 +56,10 @@ GOWORK=off go build -o integrated-recorder-adapter-soop ./cmd/integrated-recorde
 
 This repository uses the [Adapter SDK for Go](https://github.com/integrated-recorder/adapter-sdk-go). See the [Plugin Registry](https://github.com/integrated-recorder/plugin-registry) for distribution status and releases. There is no stable official Registry distribution at this time.
 
+## Experimental Native Grid PoC
+
+The independent Go Grid receiver research and synthetic fixture tests are in [tests/grid-poc](tests/grid-poc/README.md). This experimental code is separate from the Adapter Protocol v1 plugin and is not integrated into the production adapter.
+
 ## Ecosystem and license
 
 - [Integrated Recorder Core](https://github.com/integrated-recorder/core) — recording and canonical archives
