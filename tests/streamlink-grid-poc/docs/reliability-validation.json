@@ -1,0 +1,92 @@
+{
+  "streamlink_exit": 0,
+  "wall_seconds": 5.881,
+  "target_absent_first_page": true,
+  "streamlink_version": "8.6.2",
+  "soop_grid_package_installed": false,
+  "live_failover_verified": false,
+  "grid": {
+    "media_packets": 188,
+    "payload_bytes": 2937237,
+    "wire_bytes": 2953217,
+    "video_frames": 176,
+    "audio_frames": 12,
+    "sequence_discontinuities": 0,
+    "parent_connections": 1,
+    "failover_attempts": 0,
+    "failover_successes": 0,
+    "rediscoveries": 0,
+    "duplicate_frames_excluded": 0,
+    "gap_events": 0,
+    "recovered_ranges": 0,
+    "unrecoverable_ranges": 0,
+    "parent_connection_attempts": 1,
+    "video": {
+      "codec": "h264",
+      "width": 1920,
+      "height": 1080,
+      "fps_numerator": 60000,
+      "fps_denominator": 2000
+    },
+    "audio": {
+      "codec": "aac",
+      "sample_rate": 44100,
+      "channels": 2
+    },
+    "playable_video_frames": 176,
+    "media_timeline_seconds": 5.833
+  },
+  "ffprobe": {
+    "streams": [
+      {
+        "codec_name": "h264",
+        "width": 1920,
+        "height": 1080,
+        "r_frame_rate": "30/1",
+        "avg_frame_rate": "30/1"
+      },
+      {
+        "codec_name": "aac",
+        "r_frame_rate": "0/0",
+        "avg_frame_rate": "0/0"
+      }
+    ],
+    "format": {
+      "duration": "6.154333"
+    }
+  },
+  "decode_exit": 0,
+  "decode_stderr_bytes": 6545,
+  "ts_bytes": 3022664,
+  "file_sha256_verified": true,
+  "observed_utc": "2026-10-25T04:55:30.570040+00:00",
+  "bundle_sha256": "1259b7343b3c05049e393cde770210a1c3ff63579220dc57af8a8e350955bcb8",
+  "post_validation": {
+    "video_es": {
+      "exit": 0,
+      "stderr_bytes": 0
+    },
+    "audio_es": {
+      "exit": 0,
+      "stderr_bytes": 0
+    },
+    "ts_raw_decode": {
+      "exit": 0,
+      "stderr_bytes": 0
+    },
+    "coded_picture_types": {
+      "I": 3,
+      "B": 108,
+      "P": 65
+    },
+    "wire_reparsed_packets": 188,
+    "raw_payload_es_sha256_verified": true
+  },
+  "timestamped_null_output_diagnostic": "non_monotonic_DTS; PTS-only mux with B-frame source; exit 0 is NOT a clean timeline PASS",
+  "modular_tests_passed": 145,
+  "bundled_regressions_passed": 140,
+  "real_live_failover": "NOT_VERIFIED",
+  "protected_live_auth": "NOT_TESTED",
+  "test_fixtures": "synthetic; generated codec pattern only; no broadcast media published",
+  "file_preserved_after_fresh_cli": true
+}

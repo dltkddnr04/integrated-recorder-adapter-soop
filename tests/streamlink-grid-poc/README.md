@@ -4,6 +4,18 @@ This standalone experimental Streamlink sideload plugin ports the native TCP Go 
 
 The plugin is named `soop.py` and **replaces the built-in SOOP HLS plugin for the invocation that loads it**. Only Native Grid is provided. Omit `--plugin-dirs` to use the ordinary built-in SOOP plugin. The production source adapter and Go PoC are separate and unchanged.
 
+## One-file install
+
+Download [dist/soop.py](dist/soop.py) and copy it to Streamlink's user plugin directory.
+No project-package installation is needed. See [SINGLEFILE.md](docs/SINGLEFILE.md)
+for macOS/Linux/Windows paths, exact commands, update/removal and clean-venv evidence.
+The modular sources below remain the development reference.
+
+[RELIABILITY.md](docs/RELIABILITY.md) documents exact-target public bootstrap,
+bounded Parent failover, overlap-only cache recovery and explicit gap failure.
+Live failover is **not verified**. The latest live test decoded H.264/AAC, but the
+PTS-only muxer still produces DTS timeline warnings with B-frame source material.
+
 ## Install
 
 Python 3.10+ and official Streamlink 8.6.2 are the tested API baseline. From this directory:

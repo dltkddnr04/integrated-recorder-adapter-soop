@@ -3,6 +3,7 @@ __pycache__/
 .ruff_cache/
 *.egg-info/
 build/
-dist/
+dist/*
+!dist/soop.py
 .venv/
 captures/

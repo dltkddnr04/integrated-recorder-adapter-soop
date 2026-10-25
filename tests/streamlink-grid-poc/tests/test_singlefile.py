@@ -1,0 +1,174 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (c) 2026 source.soop contributors
+import ast
+import hashlib
+import importlib.util
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+import pytest
+from streamlink import Streamlink
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def load(path, name):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.fixture
+def bundle():
+    return load(ROOT / "dist" / "soop.py", "soop_singlefile_unit")
+
+
+def test_reproducible_build_and_no_runtime_loader(tmp_path):
+    builder = load(ROOT / "tools" / "build_singlefile.py", "soop_builder_unit")
+    first = builder.build().encode()
+    second = builder.build().encode()
+    assert first == second == (ROOT / "dist" / "soop.py").read_bytes()
+    assert hashlib.sha256(first).digest() == hashlib.sha256(second).digest()
+    tree = ast.parse(first, feature_version=(3, 10))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            assert not node.level and not (node.module or "").startswith("soop_grid")
+        if isinstance(node, ast.Import):
+            assert all(not a.name.startswith("soop_grid") for a in node.names)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            assert node.func.id not in ("exec", "eval", "__import__")
+    assert b"sys.path" not in first and b"zipimport" not in first
+    assert b"SPDX-License-Identifier: AGPL-3.0-only" in first
+
+
+def test_bundle_identity_dataclasses_and_golden_packets(bundle, golden):
+    def get(module, name):
+        return getattr(bundle, bundle.__grid_names__[module][name])
+
+    from soop_grid.gateway import login_packet, certificate_packet
+    from soop_grid.crypto import service6
+    from soop_grid.center import Credentials, join_body
+    from soop_grid.mpegts import TSMux
+
+    assert get("protocol", "GridError") is get("parent", "GridError")
+    assert get("protocol", "GridError") is get("center", "GridError")
+    args = ("00112233-4455-6677-8899-aabbccddeeff", 123456, 1)
+    assert get("crypto", "service6")(*args) == service6(*args)
+    args = ("00112233445566778899aabbccddeeff", "fixture-cookie", "fixture_channel")
+    assert get("gateway", "login_packet")(*args) == login_packet(*args)
+    args = (12345, "fixture_channel", "123", b"fixture-ticket")
+    assert get("gateway", "certificate_packet")(*args) == certificate_packet(*args)
+    args = (b"fixture-ticket", b"", "fixture-guid", 12345, b"fixture-only")
+    assert get("center", "join_body")(get("center", "Credentials")(*args)) == join_body(Credentials(*args))
+    original, single = TSMux(), get("mpegts", "TSMux")()
+    g = golden["ts"]
+    for kind, timestamp, payload in (
+        ("I", 50_000_000, bytes.fromhex(g["video"])),
+        ("A", 50_010_000, bytes.fromhex(g["audio"])),
+    ):
+        assert single.add(kind, timestamp, payload) == original.add(kind, timestamp, payload)
+
+
+def test_singlefile_plugin_override_without_package_install(tmp_path):
+    plugin_dir = tmp_path / "plugins"
+    plugin_dir.mkdir()
+    (plugin_dir / "soop.py").write_bytes((ROOT / "dist" / "soop.py").read_bytes())
+    python = os.environ.get("SOOP_GRID_CLEAN_PYTHON", sys.executable)
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    base = [python, "-m", "streamlink_cli", "--plugin-dir", str(plugin_dir)]
+    target = "https://play.sooplive.com/fixture_channel/12345"
+    result = subprocess.run(
+        base + ["--can-handle-url", target], env=env, cwd=tmp_path, capture_output=True, timeout=10
+    )
+    assert result.returncode == 0
+    result = subprocess.run(
+        base + ["--json", "--soop-grid-duration", "12", target],
+        env=env,
+        cwd=tmp_path,
+        capture_output=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+    data = json.loads(result.stdout)
+    assert data["streams"]["original"]["type"] == "grid"
+    if "SOOP_GRID_CLEAN_PYTHON" in os.environ:
+        probe = subprocess.run(
+            [python, "-c", "import importlib.util; assert importlib.util.find_spec('soop_grid') is None"],
+            cwd=tmp_path,
+            env=env,
+            capture_output=True,
+            timeout=10,
+        )
+        assert probe.returncode == 0, probe.stderr
+    # Same enumeration through official API, not merely successful import.
+    session = Streamlink()
+    session.plugins.load_path(str(plugin_dir))
+    _, cls, url = session.resolve_url(target)
+    assert cls.__module__.endswith("soop")
+    assert cls.__name__ == "_sg_plugin_SoopGrid"
+    assert cls(session, url).streams()["original"].config.bno == "12345"
+
+
+def test_singlefile_cli_secrets_do_not_leak(tmp_path):
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    env.update(
+        SOOP_ACCOUNT_ID="fixture_account",
+        SOOP_ACCOUNT_PASSWORD="fixture-private-password",
+        SOOP_STREAM_PASSWORD="fixture-only",
+    )
+    python = os.environ.get("SOOP_GRID_CLEAN_PYTHON", sys.executable)
+    p = subprocess.run(
+        [
+            python,
+            "-m",
+            "streamlink_cli",
+            "--plugin-dir",
+            str(ROOT / "dist"),
+            "--loglevel",
+            "debug",
+            "--json",
+            "https://play.sooplive.com/fixture_channel/12345",
+        ],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        timeout=10,
+    )
+    assert p.returncode == 0
+    assert b"fixture-private-password" not in p.stdout + p.stderr
+    assert b"fixture-only" not in p.stdout + p.stderr
+
+
+def test_linker_preserves_local_shadowing_closures_and_lazy_imports(tmp_path, monkeypatch):
+    builder = load(ROOT / "tools" / "build_singlefile.py", "soop_builder_scopes")
+    (tmp_path / "soop_grid").mkdir()
+    (tmp_path / "plugins").mkdir()
+    (tmp_path / "soop_grid" / "base.py").write_text("""from dataclasses import dataclass
+VALUE = 7
+@dataclass
+class Item:
+    value: int
+def factory(VALUE):
+    def closure():
+        return VALUE
+    return closure
+def comp():
+    return [VALUE for VALUE in range(3)], VALUE
+""")
+    (tmp_path / "plugins" / "soop.py").write_text("""from soop_grid.base import Item, factory, comp
+
+def lazy():
+    from soop_grid.base import VALUE
+    return VALUE
+__plugin__ = (Item(3).value, factory(5)(), comp(), lazy())
+""")
+    monkeypatch.setattr(builder, "ROOT", tmp_path)
+    path = tmp_path / "result.py"
+    path.write_text(builder.build())
+    linked = load(path, "scope_fixture")
+    assert linked.__plugin__ == (3, 5, ([0, 1, 2], 7), 7)

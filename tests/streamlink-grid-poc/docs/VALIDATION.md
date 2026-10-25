@@ -56,3 +56,13 @@ Before bundling: 129 modular tests passed (including Go Golden Vectors, local TC
 failover, cancellation and full FFmpeg decode of generated recovered H.264/AAC TS).
 Synthetic tests do not imply SOOP live cache replay support.
 See [RELIABILITY.md](RELIABILITY.md) for verified scope and failure policies.
+
+## Final single-file revision
+
+145 modular/construction tests and 140 identical bundled-object regressions passed.
+The final one-file plugin ran in a new Streamlink-only venv and received an exact
+public target absent from the first list page. Its 188 C748 packets yielded
+1920×1080/30fps H.264 + AAC. Full ES/TS decoding passed, but B-frame DTS timing
+warnings remain in timestamped-output validation. See
+[RELIABILITY_RESULT.md](RELIABILITY_RESULT.md) for measurements and distinctions.
+This does not supersede previous captures' own measurements or imply live failover.

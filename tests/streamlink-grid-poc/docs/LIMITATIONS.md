@@ -23,3 +23,10 @@ Bounded Parent recovery is synthetic/loopback-tested, not live-failover verified
 It requires exact cached overlap and consecutive frames; unprovable gaps terminate.
 Automatic certificate refresh and TS discontinuity restart are not implemented.
 See [RELIABILITY.md](RELIABILITY.md).
+
+Single-file runtime was tested on Linux/Python 3.12/Streamlink 8.6.2 only; macOS and
+Windows installation paths follow official Streamlink source but were not run here.
+A new 1080p30 source contained B-frames. Its raw H.264/AAC and TS decoded fully, but
+FFmpeg's timestamped null-output check reported non-monotonic DTS. Independent DTS
+reconstruction is still absent. Zero frame-number gaps does not establish perfect
+presentation timing or A/V sync. Do not infer lossless live failover from this test.
