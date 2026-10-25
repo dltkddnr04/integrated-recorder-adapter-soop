@@ -2,14 +2,14 @@
 
 This report preserves evidence from several historical revisions. The current
 user-installed filename and external ID are `soop_grid.py` / `soop_grid`;
-`dist/soop.py` remains the generated artifact. Historical packaging descriptions
+`dist/soop_grid.py` remains the generated artifact. Historical packaging descriptions
 below refer to the revision under test at that time, not current installation steps.
 
 Validation date: 2026-10-25 UTC. Host: isolated development checkout on Ubuntu x86-64, Python 3.12.3, official Streamlink 8.6.2, PyCryptodome 3.24.1. Go reference: commit `3518f21c8feeb7b046562945ade6702e2803b450`. FFmpeg/FFprobe 9.0 were used only after capture, outside the receiver.
 
 ## Actual public Native Grid capture
 
-The official Streamlink CLI loaded `plugins/soop.py` from an unrelated `/tmp` working directory with `soop_grid` installed and no PYTHONPATH. It used a current public, password-free, non-subscription live selected from the normal live list. The same BNO was retained during the tests; its identifier and all endpoints remain in private local evidence, not in this repository.
+The official Streamlink CLI loaded `soop_grid.py` from an unrelated `/tmp` working directory with `soop_grid` installed and no PYTHONPATH. It used a current public, password-free, non-subscription live selected from the normal live list. The same BNO was retained during the tests; its identifier and all endpoints remain in private local evidence, not in this repository.
 
 The successful path was public Watch -> Gateway -> Center -> server-issued Parent -> actual `0xC748` -> Python H.264/AAC extraction -> Python TS muxer -> Streamlink output. There was no Go executable, external agent, HLS manifest/segment request, or FFmpeg receive process. Gateway and Center replies had to pass the normal parser and authentication state machine to reach Parent discovery. Credential responses were not dumped.
 
@@ -93,7 +93,7 @@ Current offline suite at that historical revision: 159 tests pass when the isola
 allowed. In the default sandbox those local sockets are denied with EPERM; the same
 subset passes when run with local socket permission. A clean virtual environment with
 Streamlink 8.6.2 only (plus its own dependencies), no project package, no PYTHONPATH,
-and a copied `dist/soop.py` installed under the then-current external-plugin
+and a copied `dist/soop_grid.py` installed under the then-current external-plugin
 filename passes plugin discovery and JSON stream enumeration. The bundle is
 reproducible and source/bundle regression tests pass. Linux live tests were not run
 for that revision.

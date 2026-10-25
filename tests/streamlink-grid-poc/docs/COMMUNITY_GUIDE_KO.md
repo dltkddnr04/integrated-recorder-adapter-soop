@@ -12,7 +12,7 @@
 - 녹화 파일 크기만큼의 디스크 공간을 준비하세요.
 - Windows/macOS의 사용자 플러그인 경로는 안내하지만 해당 운영체제에서 실행 검증하지 않았습니다.
 
-저장소에 있는 `dist/soop.py` 한 파일을 사용자 플러그인 디렉터리에 **`soop_grid.py`**로 복사합니다. 외부 플러그인 ID는 `soop_grid`이고, 내장 HLS 플러그인 ID는 `soop`입니다. 내장 플러그인을 덮어쓰지 마세요.
+저장소에 있는 `dist/soop_grid.py` 한 파일을 사용자 플러그인 디렉터리에 **`soop_grid.py`**로 복사합니다. 외부 플러그인 ID는 `soop_grid`이고, 내장 HLS 플러그인 ID는 `soop`입니다. 내장 플러그인을 덮어쓰지 마세요.
 
 > 공개 게시물에는 배포한 커밋에 고정된 다운로드 주소를 사용하는 것을 권장합니다. 그러면 안내한 체크섬과 설치 파일의 버전이 일치하는지 확인하기 쉽습니다.
 
@@ -23,7 +23,7 @@
 ```sh
 brew install streamlink
 mkdir -p "$HOME/Library/Application Support/streamlink/plugins"
-curl -fL 'https://raw.githubusercontent.com/integrated-recorder/source.soop/main/tests/streamlink-grid-poc/dist/soop.py' \
+curl -fL 'https://raw.githubusercontent.com/integrated-recorder/source.soop/main/tests/streamlink-grid-poc/dist/soop_grid.py' \
   -o "$HOME/Library/Application Support/streamlink/plugins/soop_grid.py"
 ```
 
@@ -34,7 +34,7 @@ Streamlink를 설치한 뒤 사용자 데이터 디렉터리에 파일을 저장
 ```sh
 plugin_dir="${XDG_DATA_HOME:-$HOME/.local/share}/streamlink/plugins"
 mkdir -p "$plugin_dir"
-curl -fL 'https://raw.githubusercontent.com/integrated-recorder/source.soop/main/tests/streamlink-grid-poc/dist/soop.py' \
+curl -fL 'https://raw.githubusercontent.com/integrated-recorder/source.soop/main/tests/streamlink-grid-poc/dist/soop_grid.py' \
   -o "$plugin_dir/soop_grid.py"
 ```
 
@@ -46,7 +46,7 @@ PowerShell에서 Streamlink를 설치한 뒤 다음을 실행합니다.
 $dir = Join-Path $env:APPDATA 'streamlink\plugins'
 New-Item -ItemType Directory -Force $dir | Out-Null
 Invoke-WebRequest `
-  'https://raw.githubusercontent.com/integrated-recorder/source.soop/main/tests/streamlink-grid-poc/dist/soop.py' `
+  'https://raw.githubusercontent.com/integrated-recorder/source.soop/main/tests/streamlink-grid-poc/dist/soop_grid.py' `
   -OutFile (Join-Path $dir 'soop_grid.py')
 ```
 
@@ -123,7 +123,16 @@ streamlink --soop-grid-transport auto \
 
 ## 5. 계정 인증과 방송 비밀번호
 
-인증이 필요한 방송은 계정에 정상적으로 부여된 시청 권한으로 접근하세요. 계정 ID와 비밀번호는 환경변수로 전달할 수 있습니다. 아래는 POSIX 셸 예시입니다.
+인증이 필요한 방송은 계정에 정상적으로 부여된 시청 권한으로 접근하세요. 외부 플러그인의 계정 옵션은 Streamlink 내장 `soop` 플러그인의 옵션과 별도입니다. 다음 옵션을 사용하거나, 아래처럼 기존 환경변수를 사용할 수 있습니다.
+
+```sh
+streamlink --soop-grid-username USER --soop-grid-password PASS \
+  'https://play.sooplive.com/CHANNEL_ID/BNO' original -o recording.ts
+```
+
+위 명령행 입력은 셸 기록이나 프로세스 목록에 남을 수 있으므로 환경변수 방식을 권장합니다. Streamlink 8.6.2에서는 `--soop-username`과 `--soop-password`가 내장 `soop` 플러그인 옵션 공간에만 전달되어 외부 `soop_grid`에서 읽을 수 없습니다. 중복 옵션 등록은 CLI 충돌을 일으키므로 지원하지 않습니다. 상세 근거는 [인증 호환성 메모](AUTH_COMPATIBILITY.md)를 확인하세요.
+
+방송 비밀번호는 계정 비밀번호와 별개이며, `--soop-grid-stream-password` 또는 `SOOP_STREAM_PASSWORD`로 전달합니다.
 
 ```sh
 export SOOP_ACCOUNT_ID='ACCOUNT_ID'
@@ -135,7 +144,13 @@ streamlink --soop-grid-transport grid --soop-grid-require-adult \
 unset SOOP_ACCOUNT_ID SOOP_ACCOUNT_PASSWORD
 ```
 
-비밀번호 보호 방송에는 `SOOP_STREAM_PASSWORD`를 별도로 설정할 수 있습니다. 비밀번호를 명령행 인수에 직접 넣으면 셸 기록이나 프로세스 정보에 남을 수 있으므로 환경변수 입력을 권장합니다. 플러그인은 방송 비밀번호를 정상 Center JOIN 경로로 전달합니다.
+`--soop-grid-username`, `--soop-grid-password`, `--soop-grid-stream-password`를 지정하면 각 명시 옵션이 대응 환경변수보다 우선합니다. `--soop-grid-account`는 username의 별칭이며 둘 다 지정하면 오류입니다. 계정 ID/비밀번호는 함께 제공해야 합니다.
+
+플러그인은 Grid 계정 로그인을 위해 first-party HTTP Cookie Jar를 일시 사용하고 요청 종료 후 폐기합니다. Grid 자격 쿠키를 저장하거나 내장 `soop` 플러그인 캐시와 공유하지 않습니다. `--soop-grid-purge-credentials`는 `hls` 또는 Auto fallback으로 내장 플러그인에 위임될 때만 해당 플러그인의 저장 인증정보 삭제를 요청합니다. Grid 모드에서 삭제할 저장 쿠키는 없습니다.
+
+플러그인은 방송 비밀번호를 정상 Center JOIN 경로로 전달합니다.
+
+Native Grid에서는 검증된 `original`만 선택할 수 있습니다. `best` 등 실제 Grid 화질 매핑이 확인되지 않은 선택을 지원한다고 표시하지 않습니다. HLS 모드에서는 내장 `soop` 플러그인이 제공하는 화질 목록과 선택 동작을 그대로 사용합니다.
 
 이 플러그인은 성인 인증, 구독·유료 권한, 방송 비밀번호, CAPTCHA 또는 서비스의 접근 제한을 우회하지 않습니다. 계정 인증 및 보호 방송 호환성은 방송과 서버 상태에 따라 달라질 수 있습니다.
 
@@ -162,7 +177,7 @@ ffmpeg -v warning -xerror -i recording.ts \
 
 ## 7. 업데이트와 제거
 
-업데이트할 때 같은 공식 배포본의 `dist/soop.py`를 기존 사용자 플러그인 디렉터리의 `soop_grid.py`에 덮어씁니다. 체크섬은 해당 소스 리비전의 `dist/SHA256SUMS`와 비교합니다.
+업데이트할 때 같은 공식 배포본의 `dist/soop_grid.py`를 기존 사용자 플러그인 디렉터리의 `soop_grid.py`에 덮어씁니다. 체크섬은 해당 소스 리비전의 `dist/SHA256SUMS`와 비교합니다.
 
 제거할 때는 사용자 플러그인 디렉터리에서 `soop_grid.py`만 삭제합니다. Streamlink 설치 디렉터리나 내장 `soop` 플러그인은 변경하지 마세요.
 
@@ -192,6 +207,7 @@ ffmpeg -v warning -xerror -i recording.ts \
 - Cache에서 정확한 Overlap을 확인하지 못하거나 프레임 간격·정체성을 검증할 수 없으면 안전하게 실패합니다.
 - 미디어가 3초 동안 도착하지 않으면 정체로 판정해 복구를 시도할 수 있습니다. 정상적인 긴 정체 구간에서도 재연결이 발생할 수 있습니다.
 - 자동 세션 재인증, 방송 종료와 네트워크 장애의 완전한 구분, 방송 전환 및 장시간 A/V drift는 검증되지 않았습니다.
+- 기존 내장 플러그인의 `--soop-username`, `--soop-password`, `--soop-stream-password`는 외부 `soop_grid`에 전달되지 않습니다. 외부 플러그인에서는 대응하는 `--soop-grid-*` 옵션 또는 환경변수를 사용하세요.
 - 일부 progressive Annex-B H.264 timing/POC 구조와 ADTS AAC만 지원합니다. 다중 Parent, 모든 코덱, 모든 방송 조건을 지원하지 않습니다.
 - 선택적 원본 진단 캡처는 디스크 사용량이 커지고 미디어 패킷마다 동기식 기록을 할 수 있습니다. 일반 녹화에서는 활성화하지 않는 것을 권장합니다.
 - Linux에서만 직접 실행을 확인했습니다. Windows/macOS 및 다른 Streamlink/Python 조합은 미검증입니다.

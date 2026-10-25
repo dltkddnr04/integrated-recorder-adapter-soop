@@ -49,7 +49,7 @@ have not been established; they are not inferred from a disconnected socket.
 ## Private field-test supervisor
 
 Use a development installation for these tools, plus a separate clean environment
-containing official Streamlink 8.6.2 only. Copy `dist/soop.py` to a temporary plugin
+containing official Streamlink 8.6.2 only. Copy `dist/soop_grid.py` to a temporary plugin
 directory as `soop_grid.py`:
 
 ```sh

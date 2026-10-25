@@ -21,6 +21,8 @@ class Config:
     max_bytes: int | None = None
     capture_dir: str | None = field(default=None, repr=False)
     diagnostics_dir: str | None = field(default=None, repr=False)
+    referer: str | None = field(default=None, repr=False)
+    user_agent: str | None = field(default=None, repr=False)
 
     def validate(self):
         if not identifier(self.broadcaster) or (
@@ -49,7 +51,8 @@ class Config:
             raise GridError("stream_password_encoding_invalid")
 
     def clear(self):
-        self.account_password = self.stream_password = ""
+        self.account = self.account_password = self.stream_password = ""
+        self.referer = self.user_agent = None
 
 
 @dataclass(repr=False)
@@ -77,7 +80,9 @@ def bootstrap(config, report, http_factory=HTTP):
     http = http_factory()
     try:
         if config.account:
-            http.login(config.account, config.account_password)
+            if config.user_agent and hasattr(http, "session"):
+                http.session.headers["User-Agent"] = config.user_agent
+            http.login(config.account, config.account_password, config.referer)
             report("account_session_confirmed")
         bno = config.bno
         if not bno:

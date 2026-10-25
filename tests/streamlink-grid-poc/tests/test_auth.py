@@ -17,9 +17,21 @@ def test_account_login_form_and_session_confirmation(monkeypatch):
         return {"RESULT": 1} if len(calls) == 1 else {"CHANNEL": {"LOGIN_ID": "fixture_account"}}
 
     monkeypatch.setattr(http, "json", response)
-    http.login("fixture_account", "fixture-password")
+    http.login("fixture_account", "fixture-password", "https://play.sooplive.com/fixture_channel/12345")
     assert calls[0][2]["data"]["isSavePw"] == "false"
     assert calls[0][2]["data"]["szPassword"] == "fixture-password"
+    assert calls[0][2]["data"] == {
+        "szWork": "login",
+        "szType": "json",
+        "szUid": "fixture_account",
+        "szPassword": "fixture-password",
+        "isSaveId": "true",
+        "isSavePw": "false",
+        "isSaveJoin": "false",
+        "isLoginRetain": "Y",
+    }
+    assert http.session.headers["Origin"] == "https://play.sooplive.com"
+    assert http.session.headers["Referer"] == "https://play.sooplive.com/fixture_channel/12345"
     assert calls[1][1] == "https://afevent2.sooplive.com/api/get_private_info.php"
     http.close()
 

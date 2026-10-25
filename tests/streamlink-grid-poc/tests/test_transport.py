@@ -89,10 +89,57 @@ def test_hls_mode_delegates_to_official_plugin_and_auto_is_lazy(monkeypatch):
         module, "official_hls_streams", lambda *args: calls.append(args) or {"original": HLS(session)}
     )
     url = "https://play.sooplive.com/fixture_channel/12345"
-    hls = plugin_class(session, url, options={"transport": "hls"}).streams()
+    hls = plugin_class(
+        session,
+        url,
+        options={
+            "transport": "hls",
+            "grid-username": "fixture_user",
+            "grid-password": "fixture-password",
+            "grid-stream-password": "fixture-pass",
+            "grid-purge-credentials": True,
+        },
+    ).streams()
     assert hls["original"].shortname() == "hls" and len(calls) == 1
+    assert calls[0][2:] == ("fixture_user", "fixture-password", "fixture-pass", True)
     auto = plugin_class(session, url, options={"transport": "auto"}).streams()
     assert auto["original"].shortname() == "auto" and len(calls) == 1
+
+
+def test_auto_fallback_preserves_grid_credentials_and_forwards_to_builtin():
+    from soop_grid.stream import OfficialHLSFallback
+
+    received = {}
+
+    class Plugins:
+        def load_builtin(self):
+            pass
+
+        def get_loaded(self):
+            return {"soop": Soop}
+
+    class Session:
+        plugins = Plugins()
+
+    class Soop:
+        def __init__(self, _session, _url, options):
+            received.update(options)
+
+        def streams(self):
+            return {"original": FakeStream(result="reader")}
+
+    session = Session()
+    fallback = OfficialHLSFallback(
+        session, "fixture-url", "fixture_user", "fixture-password", "fixture-pass", True
+    )
+    assert fallback.open() == "reader"
+    assert received == {
+        "username": "fixture_user",
+        "password": "fixture-password",
+        "stream-password": "fixture-pass",
+        "purge-credentials": True,
+    }
+    assert fallback.account == fallback.password == fallback.stream_password == ""
 
 
 def test_official_hls_fallback_redacts_and_clears_credentials():

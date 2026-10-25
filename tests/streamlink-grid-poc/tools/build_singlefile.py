@@ -256,7 +256,7 @@ $type live
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true")
-    parser.add_argument("--output", type=Path, default=ROOT / "dist" / "soop.py")
+    parser.add_argument("--output", type=Path, default=ROOT / "dist" / "soop_grid.py")
     args = parser.parse_args()
     result = build()
     digest = hashlib.sha256(result.encode()).hexdigest()

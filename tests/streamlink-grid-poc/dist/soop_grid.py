@@ -162,7 +162,7 @@ class _sg_protocol_Network:
             sock.close()
 
 
-# Module: auth; source SHA-256: 4711abd6d36d33a0e3ad69f659b9cd010b491984d198818781326a59c0514ebf
+# Module: auth; source SHA-256: 63fb4fda1e752f3ddbb2fb3fe7e59dfd8ee62669fcffbb0e0f69ea6daf39e1f0
 import json as _sg_auth_json
 import re as _sg_auth_re
 from http.cookies import SimpleCookie as _sg_auth_SimpleCookie
@@ -223,9 +223,11 @@ class _sg_auth_HTTP:
             raise _sg_auth_GridError('scoped_cookie_invalid') from None
         return jar[name].value if name in jar else ''
 
-    def login(self, account, password):
+    def login(self, account, password, referer=None):
         if not _sg_auth_identifier(account) or not password or len(password) > 1024 or ('\x00' in password):
             raise _sg_auth_GridError('account_input_invalid')
+        if referer is not None:
+            self.session.headers['Referer'] = referer
         result = self.json('POST', 'https://login.sooplive.com/app/LoginAction.php', data={'szWork': 'login', 'szType': 'json', 'szUid': account, 'szPassword': password, 'isSaveId': 'true', 'isSavePw': 'false', 'isSaveJoin': 'false', 'isLoginRetain': 'Y'})
         if str(result.get('RESULT')) != '1':
             raise _sg_auth_GridError('account_login_denied_or_verification_required')
@@ -714,7 +716,7 @@ class _sg_recovery_Continuity:
             self.report('parent_failover_succeeded')
 
 
-# Module: bootstrap; source SHA-256: fa4172ea8c9afe35a1b7b8a02367c3d37353df72d273c85ab30d204fc1a607b0
+# Module: bootstrap; source SHA-256: 545003a46a67bc998ef9a7c32c8d17a84dc78da681c55e656a0289c83482d794
 import re as _sg_bootstrap_re
 from dataclasses import dataclass as _sg_bootstrap_dataclass, field as _sg_bootstrap_field
 _sg_bootstrap_HTTP = _sg_auth_HTTP
@@ -736,6 +738,8 @@ class _sg_bootstrap_Config:
     max_bytes: int | None = None
     capture_dir: str | None = _sg_bootstrap_field(default=None, repr=False)
     diagnostics_dir: str | None = _sg_bootstrap_field(default=None, repr=False)
+    referer: str | None = _sg_bootstrap_field(default=None, repr=False)
+    user_agent: str | None = _sg_bootstrap_field(default=None, repr=False)
 
     def validate(self):
         if not _sg_bootstrap_identifier(self.broadcaster) or (self.bno is not None and (not isinstance(self.bno, str) or not _sg_bootstrap_re.fullmatch('[0-9]{1,10}', self.bno))):
@@ -755,7 +759,8 @@ class _sg_bootstrap_Config:
             raise _sg_bootstrap_GridError('stream_password_encoding_invalid')
 
     def clear(self):
-        self.account_password = self.stream_password = ''
+        self.account = self.account_password = self.stream_password = ''
+        self.referer = self.user_agent = None
 
 @_sg_bootstrap_dataclass(repr=False)
 class _sg_bootstrap_Session:
@@ -780,7 +785,9 @@ def _sg_bootstrap_bootstrap(config, report, http_factory=_sg_bootstrap_HTTP):
     http = http_factory()
     try:
         if config.account:
-            http.login(config.account, config.account_password)
+            if config.user_agent and hasattr(http, 'session'):
+                http.session.headers['User-Agent'] = config.user_agent
+            http.login(config.account, config.account_password, config.referer)
             report('account_session_confirmed')
         bno = config.bno
         if not bno:
@@ -2027,7 +2034,7 @@ def _sg_gateway_obtain_certificate(network, session, report):
         network.release(sock)
 
 
-# Module: stream; source SHA-256: b1ffd30bfabdc6e60638e0bcf63091a4cd750145e9c84b2635821eacee0a8122
+# Module: stream; source SHA-256: 04be09aacb407e24078d52b8aa7296747e517d7f8b98c59c79202c33288a5b68
 import threading as _sg_stream_threading
 import time as _sg_stream_time
 import logging as _sg_stream_logging
@@ -2285,9 +2292,10 @@ class _sg_stream_SoopGridStream(_sg_stream_Stream):
 class _sg_stream_OfficialHLSFallback:
     """Lazy, one-shot delegation to Streamlink's maintained SOOP plugin."""
 
-    def __init__(self, session, url, account, password, stream_password):
+    def __init__(self, session, url, account, password, stream_password, purge_credentials=False):
         self.session, self.url, self.account = (session, url, account)
         self.password, self.stream_password = (password, stream_password)
+        self.purge_credentials = purge_credentials
         self.used = False
 
     def __repr__(self):
@@ -2305,7 +2313,7 @@ class _sg_stream_OfficialHLSFallback:
             plugin_class = self.session.plugins.get_loaded().get('soop')
             if plugin_class is None:
                 raise _sg_stream_StreamError('Streamlink built-in SOOP plugin is unavailable')
-            plugin = plugin_class(self.session, self.url, options={'username': self.account, 'password': self.password, 'stream-password': self.stream_password})
+            plugin = plugin_class(self.session, self.url, options={'username': self.account, 'password': self.password, 'stream-password': self.stream_password, 'purge-credentials': self.purge_credentials})
             streams = plugin.streams()
             selected = streams.get('original') or next(iter(streams.values()), None)
             if selected is None:
@@ -2347,7 +2355,7 @@ class _sg_stream_SoopAutoStream(_sg_stream_Stream):
                 self.fallback.clear()
 
 
-# Module: plugin; source SHA-256: c7977d890652894bcb6f765d49a6ecb745042dbb364cb12d38dca7c44e9fd69d
+# Module: plugin; source SHA-256: 95b9ac414abdc232cb9b6f69cfe92eb5b4a998e7405adbe2fbe063b2fd3cb813
 import os as _sg_plugin_os
 import re as _sg_plugin_re
 import logging as _sg_plugin_logging
@@ -2360,39 +2368,57 @@ _sg_plugin_SoopAutoStream = _sg_stream_SoopAutoStream
 _sg_plugin_SoopGridStream = _sg_stream_SoopGridStream
 _sg_plugin_log = _sg_plugin_logging.getLogger('streamlink.plugins.soop_grid')
 
-def _sg_plugin_official_hls_streams(session, url, account, password, stream_password):
+def _sg_plugin_official_hls_streams(session, url, account, password, stream_password, purge_credentials=False):
     session.plugins.load_builtin()
     plugin_class = session.plugins.get_loaded().get('soop')
     if plugin_class is None:
         return {}
-    plugin = plugin_class(session, url, options={'username': account, 'password': password, 'stream-password': stream_password})
+    plugin = plugin_class(session, url, options={'username': account, 'password': password, 'stream-password': stream_password, 'purge-credentials': purge_credentials})
     return plugin.streams()
 
 @_sg_plugin_pluginmatcher(_sg_plugin_re.compile('https?://play\\.(?:sooplive\\.com|sooplive\\.co\\.kr|afreecatv\\.com)/(?P<channel>[A-Za-z0-9_-]+)(?:/(?P<bno>\\d+))?/?(?:[?#].*)?$'), priority=30)
 @_sg_plugin_pluginargument('transport', choices=('auto', 'grid', 'hls'), default='auto', argument_name='soop-grid-transport', help='Transport: Grid, official SOOP HLS, or Grid-first with initial HLS fallback.')
-@_sg_plugin_pluginargument('grid-account', sensitive=True, argument_name='soop-grid-account', help='SOOP account ID; password is read from SOOP_ACCOUNT_PASSWORD.')
+@_sg_plugin_pluginargument('grid-account', sensitive=True, argument_name='soop-grid-account', help='Legacy alias for --soop-grid-username.')
+@_sg_plugin_pluginargument('grid-username', sensitive=True, argument_name='soop-grid-username', help='SOOP account ID for Native Grid and HLS fallback.')
+@_sg_plugin_pluginargument('grid-password', sensitive=True, argument_name='soop-grid-password', help='SOOP account password for Native Grid and HLS fallback.')
 @_sg_plugin_pluginargument('grid-require-adult', action='store_true', argument_name='soop-grid-require-adult', help='Require the authenticated live API adult check.')
 @_sg_plugin_pluginargument('grid-duration', type=int, argument_name='soop-grid-duration', help='Optional Grid capture limit in seconds; omit to record until stopped.')
 @_sg_plugin_pluginargument('grid-max-bytes', type=int, argument_name='soop-grid-max-bytes', help='Optional maximum Grid wire bytes; omit for no lifetime byte cap.')
 @_sg_plugin_pluginargument('grid-diagnostics', argument_name='soop-grid-diagnostics', help='Create a new private directory for redacted diagnostics and atomic summary.')
-@_sg_plugin_pluginargument('grid-stream-password', sensitive=True, argument_name='soop-grid-stream-password', help='Broadcast password. Prefer SOOP_STREAM_PASSWORD to avoid shell history.')
+@_sg_plugin_pluginargument('grid-stream-password', sensitive=True, argument_name='soop-grid-stream-password', help='Broadcast password for Native Grid and HLS fallback.')
+@_sg_plugin_pluginargument('grid-purge-credentials', action='store_true', argument_name='soop-grid-purge-credentials', help='Ask the built-in SOOP plugin to purge its saved credentials in HLS mode.')
 class _sg_plugin_SoopGridPlugin(_sg_plugin_Plugin):
 
     def _get_streams(self):
         transport = self.get_option('transport') or 'auto'
-        account = self.get_option('grid-account') or _sg_plugin_os.environ.get('SOOP_ACCOUNT_ID', '')
-        account_password = _sg_plugin_os.environ.pop('SOOP_ACCOUNT_PASSWORD', '')
-        stream_password = self.get_option('grid-stream-password') or _sg_plugin_os.environ.pop('SOOP_STREAM_PASSWORD', '')
+        account_option = self.get_option('grid-username')
+        legacy_account_option = self.get_option('grid-account')
+        if account_option is not None and legacy_account_option is not None:
+            raise _sg_plugin_PluginError('Specify only one of --soop-grid-username and --soop-grid-account')
+        account = account_option if account_option is not None else legacy_account_option if legacy_account_option is not None else _sg_plugin_os.environ.get('SOOP_ACCOUNT_ID', '')
+        account_password = self.get_option('grid-password')
+        if account_password is None:
+            account_password = _sg_plugin_os.environ.pop('SOOP_ACCOUNT_PASSWORD', '')
+        else:
+            _sg_plugin_os.environ.pop('SOOP_ACCOUNT_PASSWORD', None)
+        stream_password = self.get_option('grid-stream-password')
+        if stream_password is None:
+            stream_password = _sg_plugin_os.environ.pop('SOOP_STREAM_PASSWORD', '')
+        else:
+            _sg_plugin_os.environ.pop('SOOP_STREAM_PASSWORD', None)
+        purge_credentials = bool(self.get_option('grid-purge-credentials'))
+        if bool(account) != bool(account_password) or (stream_password and (not account)):
+            raise _sg_plugin_PluginError('account_credentials_required')
         if transport == 'hls':
             try:
-                hls_streams = _sg_plugin_official_hls_streams(self.session, self.url, account, account_password, stream_password)
+                hls_streams = _sg_plugin_official_hls_streams(self.session, self.url, account, account_password, stream_password, purge_credentials)
             except Exception:
                 raise _sg_plugin_PluginError('Official SOOP HLS stream enumeration failed') from None
             if not hls_streams:
                 raise _sg_plugin_PluginError('The official SOOP plugin returned no HLS streams')
             yield from hls_streams.items()
             return
-        config = _sg_plugin_Config(broadcaster=self.match['channel'], bno=self.match['bno'], account=account, account_password=account_password, stream_password=stream_password, require_adult=bool(self.get_option('grid-require-adult')), duration=self.get_option('grid-duration'), max_bytes=self.get_option('grid-max-bytes'), capture_dir=_sg_plugin_os.environ.get('SOOP_GRID_CAPTURE_DIR') or None, diagnostics_dir=self.get_option('grid-diagnostics') or _sg_plugin_os.environ.get('SOOP_GRID_DIAGNOSTICS_DIR') or None)
+        config = _sg_plugin_Config(broadcaster=self.match['channel'], bno=self.match['bno'], account=account, account_password=account_password, stream_password=stream_password, require_adult=bool(self.get_option('grid-require-adult')), duration=self.get_option('grid-duration'), max_bytes=self.get_option('grid-max-bytes'), capture_dir=_sg_plugin_os.environ.get('SOOP_GRID_CAPTURE_DIR') or None, diagnostics_dir=self.get_option('grid-diagnostics') or _sg_plugin_os.environ.get('SOOP_GRID_DIAGNOSTICS_DIR') or None, referer=self.url, user_agent=self.session.http.headers.get('User-Agent'))
         try:
             config.validate()
         except _sg_plugin_GridError as exc:
@@ -2400,7 +2426,7 @@ class _sg_plugin_SoopGridPlugin(_sg_plugin_Plugin):
             raise _sg_plugin_PluginError(str(exc)) from None
         grid = _sg_plugin_SoopGridStream(self.session, config)
         if transport == 'auto':
-            fallback = _sg_plugin_OfficialHLSFallback(self.session, self.url, account, account_password, stream_password)
+            fallback = _sg_plugin_OfficialHLSFallback(self.session, self.url, account, account_password, stream_password, purge_credentials=purge_credentials)
             yield ('original', _sg_plugin_SoopAutoStream(self.session, grid, fallback))
         else:
             yield ('original', grid)

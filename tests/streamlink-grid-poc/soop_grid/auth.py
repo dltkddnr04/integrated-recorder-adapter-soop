@@ -79,9 +79,11 @@ class HTTP:
             raise GridError("scoped_cookie_invalid") from None
         return jar[name].value if name in jar else ""
 
-    def login(self, account, password):
+    def login(self, account, password, referer=None):
         if not identifier(account) or not password or len(password) > 1024 or "\0" in password:
             raise GridError("account_input_invalid")
+        if referer is not None:
+            self.session.headers["Referer"] = referer
         result = self.json(
             "POST",
             "https://login.sooplive.com/app/LoginAction.php",

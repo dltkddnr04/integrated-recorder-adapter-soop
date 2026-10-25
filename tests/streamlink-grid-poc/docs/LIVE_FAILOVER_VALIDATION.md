@@ -20,7 +20,7 @@ The first complete test run used the restored FFmpeg tools but lacked local sock
 
 ## 2. Fault Injection Implementation
 
-Added the research-only `tools/live_fault_inject.py` harness and an offline isolation test. It is not part of the general plugin interface and is not bundled into `dist/soop.py`.
+Added the research-only `tools/live_fault_inject.py` harness and an offline isolation test. It is not part of the general plugin interface and is not bundled into `dist/soop_grid.py`.
 
 The harness selects one candidate from a limited public live-list sample, then relies on the normal exact BJID/BNO, Live metadata, public Watch ticket and Grid bootstrap checks. It injects only after 100 accepted media packets and only closes the socket that sent the Parent `0xCB2E` handshake. Gateway and Center sockets remain untouched. It injects at most one or three sequential faults, requires at least 100 accepted packets between recoveries, and applies a single duration deadline and a 256/300 MiB wire budget. Per-run endpoint IDs are HMACs using an ephemeral key; the key and raw endpoint are not written. Output directories and diagnostics use owner-only permissions.
 

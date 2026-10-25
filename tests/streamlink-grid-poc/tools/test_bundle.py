@@ -3,7 +3,7 @@
 # Copyright (c) 2026 source.soop contributors
 """Test-only facades run existing offline tests against static bundled objects.
 
-This harness is never distributed inside soop.py. It does not load modular source.
+This harness is never distributed inside soop_grid.py. It does not load modular source.
 It redirects test imports/monkeypatches to bundled globals in this process only.
 """
 
@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def main():
-    spec = importlib.util.spec_from_file_location("soop_static_parity", ROOT / "dist" / "soop.py")
+    spec = importlib.util.spec_from_file_location("soop_static_parity", ROOT / "dist" / "soop_grid.py")
     bundle = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = bundle
     spec.loader.exec_module(bundle)
@@ -43,7 +43,7 @@ def main():
             continue
         facade = Facade("soop_grid." + name)
         facade.mapping = mapping
-        facade.__file__ = str(ROOT / "dist" / "soop.py")
+        facade.__file__ = str(ROOT / "dist" / "soop_grid.py")
         sys.modules[facade.__name__] = facade
         setattr(package, name, facade)
     import pytest

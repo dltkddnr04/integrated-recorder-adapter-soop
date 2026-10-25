@@ -127,6 +127,139 @@ def test_secrets_are_not_serialized_and_consumed_from_environment(monkeypatch):
     stream.grid.config.clear()
 
 
+@pytest.mark.parametrize(
+    ("options", "environment", "expected"),
+    [
+        (
+            {"grid-username": "cli_user", "grid-password": "cli_pass"},
+            {"SOOP_ACCOUNT_ID": "env_user", "SOOP_ACCOUNT_PASSWORD": "env_pass"},
+            ("cli_user", "cli_pass"),
+        ),
+        (
+            {"grid-account": "legacy_user", "grid-password": "cli_pass"},
+            {"SOOP_ACCOUNT_ID": "env_user"},
+            ("legacy_user", "cli_pass"),
+        ),
+        ({}, {"SOOP_ACCOUNT_ID": "env_user", "SOOP_ACCOUNT_PASSWORD": "env_pass"}, ("env_user", "env_pass")),
+    ],
+)
+def test_external_credentials_cli_precedes_environment(monkeypatch, options, environment, expected):
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    session = Streamlink()
+    session.plugins.load_path(str(ROOT / "plugins"))
+    url = "https://play.sooplive.com/fixture_channel/12345"
+    cls = session.resolve_url(url)[1]
+    stream = cls(session, url, options=options).streams()["original"]
+    assert (stream.grid.config.account, stream.grid.config.account_password) == expected
+    assert "SOOP_ACCOUNT_PASSWORD" not in os.environ
+    stream.grid.config.clear()
+
+
+def test_external_username_password_must_be_a_pair_and_conflicting_aliases_fail(monkeypatch):
+    session = Streamlink()
+    session.plugins.load_path(str(ROOT / "plugins"))
+    url = "https://play.sooplive.com/fixture_channel/12345"
+    cls = session.resolve_url(url)[1]
+    with pytest.raises(PluginError, match="account_credentials_required"):
+        cls(session, url, options={"grid-username": "fixture_user"}).streams()
+    with pytest.raises(PluginError, match="Specify only one"):
+        cls(session, url, options={"grid-username": "one", "grid-account": "two"}).streams()
+
+
+def test_stream_password_cli_precedes_environment_and_is_cleared(monkeypatch):
+    monkeypatch.setenv("SOOP_STREAM_PASSWORD", "environment-pass")
+    monkeypatch.setenv("SOOP_ACCOUNT_ID", "fixture_user")
+    monkeypatch.setenv("SOOP_ACCOUNT_PASSWORD", "fixture-pass")
+    session = Streamlink()
+    session.plugins.load_path(str(ROOT / "plugins"))
+    url = "https://play.sooplive.com/fixture_channel/12345"
+    cls = session.resolve_url(url)[1]
+    stream = cls(
+        session,
+        url,
+        options={
+            "grid-username": "fixture_user",
+            "grid-password": "fixture-pass",
+            "grid-stream-password": "cli-pass",
+        },
+    ).streams()["original"]
+    assert stream.grid.config.stream_password == "cli-pass"
+    assert "SOOP_STREAM_PASSWORD" not in os.environ
+    stream.grid.config.clear()
+
+
+def test_auto_grid_and_hls_fallback_receive_the_same_credentials():
+    session = Streamlink()
+    session.plugins.load_path(str(ROOT / "plugins"))
+    url = "https://play.sooplive.com/fixture_channel/12345"
+    cls = session.resolve_url(url)[1]
+    stream = cls(
+        session,
+        url,
+        options={
+            "grid-username": "fixture_user",
+            "grid-password": "fixture-password",
+            "grid-stream-password": "fixture-pass",
+        },
+    ).streams()["original"]
+    assert stream.shortname() == "auto"
+    assert (
+        stream.grid.config.account,
+        stream.grid.config.account_password,
+        stream.grid.config.stream_password,
+    ) == (stream.fallback.account, stream.fallback.password, stream.fallback.stream_password)
+    assert "fixture-password" not in repr(stream) and "fixture-pass" not in repr(stream)
+
+
+def test_streamlink_862_routes_official_options_only_to_builtin_soop():
+    """Exercise Streamlink's real parser and per-plugin option setup contract."""
+    from streamlink_cli.argparser import ArgumentParser, setup_plugin_args, setup_plugin_options
+
+    class UserInput:
+        def ask(self, prompt):
+            raise AssertionError("unexpected prompt")
+
+        def ask_password(self, prompt):
+            raise AssertionError("unexpected prompt")
+
+    session = Streamlink()
+    session.set_option("user-input-requester", UserInput())
+    session.plugins.load_builtin()
+    session.plugins.load_path(str(ROOT / "plugins"))
+    parser = ArgumentParser()
+    setup_plugin_args(session, parser)
+    parsed = parser.parse_args(
+        [
+            "--soop-username",
+            "official_user",
+            "--soop-password",
+            "official_password",
+            "--soop-stream-password",
+            "official_stream_password",
+            "--soop-grid-username",
+            "grid_user",
+            "--soop-grid-password",
+            "grid_password",
+            "--soop-grid-stream-password",
+            "grid_stream_password",
+        ]
+    )
+    plugins = session.plugins.get_loaded()
+    official_options = setup_plugin_options(session, parsed, "soop", plugins["soop"])
+    grid_options = setup_plugin_options(session, parsed, "soop_grid", plugins["soop_grid"])
+    assert (official_options.get("username"), official_options.get("password")) == (
+        "official_user",
+        "official_password",
+    )
+    assert (grid_options.get("grid-username"), grid_options.get("grid-password")) == (
+        "grid_user",
+        "grid_password",
+    )
+    assert grid_options.get("grid-stream-password") == "grid_stream_password"
+    assert not any(key.startswith("soop_") for key in vars(grid_options))
+
+
 @pytest.mark.parametrize("duration", [0, -1])
 def test_cli_duration_rejects_nonpositive_limits(duration):
     session = Streamlink()

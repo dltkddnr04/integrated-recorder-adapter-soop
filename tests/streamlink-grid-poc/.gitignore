@@ -4,7 +4,7 @@ __pycache__/
 *.egg-info/
 build/
 dist/*
-!dist/soop.py
+!dist/soop_grid.py
 !dist/SHA256SUMS
 .venv/
 captures/

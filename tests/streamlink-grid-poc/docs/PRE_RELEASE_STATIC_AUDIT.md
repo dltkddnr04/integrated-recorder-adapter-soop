@@ -3,10 +3,10 @@
 **Audit date:** 2026-10-25 UTC
 **Audited HEAD:** `8b31e14120b5d9b09f48e9721a1ae5c229da8abe`
 **Scope:** `tests/streamlink-grid-poc/`, including modular Python sources, tests,
-documentation, and generated `dist/soop.py`.
+documentation, and generated `dist/soop_grid.py`.
 **Decision:** **BETA_GO_WITH_LIMITATIONS**
 
-**Packaging note:** the distribution artifact is `dist/soop.py`; the current
+**Packaging note:** the distribution artifact is `dist/soop_grid.py`; the current
 user installation name is `soop_grid.py` and external ID is `soop_grid`. The
 built-in ID remains `soop`.
 See [SINGLEFILE.md](SINGLEFILE.md) for the current installation instructions.
@@ -190,7 +190,7 @@ The generated artifact already matched the deterministic builder; the expected S
 did not change:
 
 ```text
-Artifact: dist/soop.py
+Artifact: dist/soop_grid.py
 Installed filename at audited revision: historical sideload filename
 SHA-256: 4752f2b4ad99c0f647adb9c992beaa0a9e4f635b3ca3ce5fa30e2edbcaea52e7
 License: AGPL-3.0-only
@@ -205,7 +205,7 @@ is identical; no source or bundle changes were made in this audit.
 These artifact fields describe the baseline at the time of the static audit and are
 retained as historical evidence. The filename follow-up changes the source plugin
 module/logger namespace and is verified separately; the source artifact path remains
-`dist/soop.py`.
+`dist/soop_grid.py`.
 
 ## Beta publication notes
 
@@ -245,7 +245,7 @@ with the listed usage caveats. Do not advertise stable or universal lossless beh
 
 ## Current packaging details
 
-The generated artifact path is `dist/soop.py`, the source entrypoint is
+The generated artifact path is `dist/soop_grid.py`, the source entrypoint is
 `plugins/soop_grid.py`, and the user installs it as `soop_grid.py`. Streamlink resolves the external ID as `soop_grid`; its built-in
 `soop` plugin remains unchanged. The existing default transport remains `auto`
 (Grid-first). No receiver, transport, or protocol code changed.
@@ -260,7 +260,7 @@ Bundled regressions: **189 passed**. Ruff, compileall, and deterministic regener
 passed.
 
 ```text
-Current artifact: dist/soop.py
+Current artifact: dist/soop_grid.py
 Current install name: soop_grid.py
 Current external plugin ID: soop_grid
 Built-in plugin ID: soop

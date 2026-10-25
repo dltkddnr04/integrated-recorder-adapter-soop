@@ -28,7 +28,7 @@ No project package, Go, FFmpeg receive process, SOOP Agent, or VPN is required. 
 
 ## Install
 
-Save the repository artifact `dist/soop.py` in Streamlink's user plugin directory as **`soop_grid.py`**. Streamlink loads it with the external plugin ID `soop_grid`; the built-in `soop` plugin remains available.
+Save the repository artifact `dist/soop_grid.py` in Streamlink's user plugin directory as **`soop_grid.py`**. Streamlink loads it with the external plugin ID `soop_grid`; the built-in `soop` plugin remains available.
 
 See the [Korean user guide](docs/COMMUNITY_GUIDE_KO.md) for platform-specific paths, discovery checks, updates, and removal. For a reproducible installation, use a download URL pinned to the published release commit.
 
@@ -58,9 +58,11 @@ When omitted, the transport option defaults to `auto`, which tries Native Grid f
 - A roughly 600-second recording and three Cache-assisted recoveries after client-side Parent socket closes in one session were verified in controlled experiments. This does not guarantee lossless recovery from every failure.
 - Automatic account reauthentication, reliable classification of broadcast end versus network failure, and automatic broadcast-number changes are not supported.
 - Support is limited to validated subsets of H.264 timing/POC structures and ADTS AAC. Multi-Parent simultaneous reception is not supported.
+- Native Grid exposes only the verified `original` stream. HLS uses the quality choices provided by Streamlink's built-in `soop` plugin.
 - If Cache overlap and continuity cannot be verified, reception fails rather than inventing data. Three seconds without media may trigger recovery.
 - Optional raw diagnostic capture can consume substantial disk space and synchronous I/O. It is disabled by default.
 - Windows/macOS runtime, all broadcast conditions, and long-run A/V drift have not been verified.
+- For authenticated broadcasts, use `--soop-grid-username` and `--soop-grid-password`, or `SOOP_ACCOUNT_ID` / `SOOP_ACCOUNT_PASSWORD`. Streamlink's built-in `--soop-username` / `--soop-password` options are not passed to the external plugin. The broadcast password is separate: `--soop-grid-stream-password` or `SOOP_STREAM_PASSWORD`.
 
 See [limitations](docs/LIMITATIONS.md), the [pre-release static audit](docs/PRE_RELEASE_STATIC_AUDIT.md), and [live failover validation](docs/LIVE_FAILOVER_VALIDATION.md) for the evidence and boundaries.
 
@@ -68,6 +70,7 @@ See [limitations](docs/LIMITATIONS.md), the [pre-release static audit](docs/PRE_
 
 - [Korean installation and user guide](docs/COMMUNITY_GUIDE_KO.md)
 - [Single-file installation and build](docs/SINGLEFILE.md)
+- [Authentication option compatibility and limitations](docs/AUTH_COMPATIBILITY.md)
 - [Architecture and protocol](docs/ARCHITECTURE.md)
 - [Recovery policy](docs/RELIABILITY.md)
 - [Validation history and scope](docs/VALIDATION.md)

@@ -291,9 +291,10 @@ class SoopGridStream(Stream):
 class OfficialHLSFallback:
     """Lazy, one-shot delegation to Streamlink's maintained SOOP plugin."""
 
-    def __init__(self, session, url, account, password, stream_password):
+    def __init__(self, session, url, account, password, stream_password, purge_credentials=False):
         self.session, self.url, self.account = session, url, account
         self.password, self.stream_password = password, stream_password
+        self.purge_credentials = purge_credentials
         self.used = False
 
     def __repr__(self):
@@ -318,6 +319,7 @@ class OfficialHLSFallback:
                     "username": self.account,
                     "password": self.password,
                     "stream-password": self.stream_password,
+                    "purge-credentials": self.purge_credentials,
                 },
             )
             streams = plugin.streams()

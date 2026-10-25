@@ -25,14 +25,14 @@ def load(path, name):
 
 @pytest.fixture
 def bundle():
-    return load(ROOT / "dist" / "soop.py", "soop_singlefile_unit")
+    return load(ROOT / "dist" / "soop_grid.py", "soop_singlefile_unit")
 
 
 def test_reproducible_build_and_no_runtime_loader(tmp_path):
     builder = load(ROOT / "tools" / "build_singlefile.py", "soop_builder_unit")
     first = builder.build().encode()
     second = builder.build().encode()
-    assert first == second == (ROOT / "dist" / "soop.py").read_bytes()
+    assert first == second == (ROOT / "dist" / "soop_grid.py").read_bytes()
     assert hashlib.sha256(first).digest() == hashlib.sha256(second).digest()
     tree = ast.parse(first, feature_version=(3, 10))
     for node in ast.walk(tree):
@@ -77,7 +77,7 @@ def test_bundle_identity_dataclasses_and_golden_packets(bundle, golden):
 def test_singlefile_plugin_coexists_with_builtin_without_package_install(tmp_path):
     plugin_dir = tmp_path / "plugins"
     plugin_dir.mkdir()
-    (plugin_dir / "soop_grid.py").write_bytes((ROOT / "dist" / "soop.py").read_bytes())
+    (plugin_dir / "soop_grid.py").write_bytes((ROOT / "dist" / "soop_grid.py").read_bytes())
     python = os.environ.get("SOOP_GRID_CLEAN_PYTHON", sys.executable)
     env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
     base = [python, "-m", "streamlink_cli", "--plugin-dir", str(plugin_dir)]
@@ -159,6 +159,40 @@ def test_singlefile_cli_secrets_do_not_leak(tmp_path):
     assert b"fixture-only" not in p.stdout + p.stderr
 
 
+def test_clean_cli_accepts_external_auth_options_without_module_install(tmp_path):
+    python = os.environ.get("SOOP_GRID_CLEAN_PYTHON", sys.executable)
+    env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
+    plugin_dir = tmp_path / "plugins"
+    plugin_dir.mkdir()
+    (plugin_dir / "soop_grid.py").write_bytes((ROOT / "dist" / "soop_grid.py").read_bytes())
+    result = subprocess.run(
+        [
+            python,
+            "-m",
+            "streamlink_cli",
+            "--plugin-dir",
+            str(plugin_dir),
+            "--json",
+            "--soop-grid-username",
+            "fixture_user",
+            "--soop-grid-password",
+            "fixture-password",
+            "--soop-grid-stream-password",
+            "fixture-pass",
+            "https://play.sooplive.com/fixture_channel/12345",
+        ],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["plugin"] == "soop_grid"
+    assert "fixture-password" not in result.stdout + result.stderr
+    assert "fixture-pass" not in result.stdout + result.stderr
+
+
 def test_linker_preserves_local_shadowing_closures_and_lazy_imports(tmp_path, monkeypatch):
     builder = load(ROOT / "tools" / "build_singlefile.py", "soop_builder_scopes")
     (tmp_path / "soop_grid").mkdir()
@@ -192,7 +226,7 @@ __plugin__ = (Item(3).value, factory(5)(), comp(), lazy())
 def test_old_and_new_install_names_both_match_and_require_manual_migration(tmp_path):
     plugin_dir = tmp_path / "plugins"
     plugin_dir.mkdir()
-    artifact = (ROOT / "dist" / "soop.py").read_bytes()
+    artifact = (ROOT / "dist" / "soop_grid.py").read_bytes()
     (plugin_dir / "soopgrid.py").write_bytes(artifact)
     (plugin_dir / "soop_grid.py").write_bytes(artifact)
 
@@ -212,7 +246,7 @@ def test_old_and_new_install_names_both_match_and_require_manual_migration(tmp_p
 
 
 def test_old_new_plugin_collision_selection_follows_load_order(tmp_path):
-    artifact = (ROOT / "dist" / "soop.py").read_bytes()
+    artifact = (ROOT / "dist" / "soop_grid.py").read_bytes()
     url = "https://play.sooplive.com/fixture_channel/12345"
     observed = []
     for index, names in enumerate((("soopgrid.py", "soop_grid.py"), ("soop_grid.py", "soopgrid.py"))):

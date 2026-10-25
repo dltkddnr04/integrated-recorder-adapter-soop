@@ -4,14 +4,16 @@
 
 ## 사용자 설치
 
-Git 저장소의 생성 배포 산출물은 `dist/soop.py`입니다. 이를 Streamlink 사용자 플러그인 디렉터리에 **`soop_grid.py`**라는 이름으로 저장합니다. Streamlink가 인식하는 ID와 내장 플러그인 ID는 서로 다릅니다.
+Git 저장소의 생성 배포 산출물은 `dist/soop_grid.py`입니다. 이를 Streamlink 사용자 플러그인 디렉터리에 **`soop_grid.py`**라는 이름으로 저장합니다. Streamlink가 인식하는 ID와 내장 플러그인 ID는 서로 다릅니다.
 
 | 구분 | 이름 |
 | --- | --- |
-| 저장소 배포 산출물 | `dist/soop.py` |
+| 저장소 배포 산출물 | `dist/soop_grid.py` |
 | 사용자 설치 파일명 | `soop_grid.py` |
 | Streamlink 외부 플러그인 ID | `soop_grid` |
 | Streamlink 내장 SOOP HLS 플러그인 ID | `soop` |
+
+인증 방송에는 외부 플러그인 전용 `--soop-grid-username`, `--soop-grid-password`, `--soop-grid-stream-password` 옵션을 사용합니다. 내장 플러그인의 `--soop-username` 계열 옵션은 외부 플러그인 인스턴스에 전달되지 않습니다. Streamlink 8.6.2의 옵션 전달 근거와 로그인·쿠키 정책은 [인증 호환성 메모](AUTH_COMPATIBILITY.md)에 있습니다.
 
 내장 `soop` 플러그인을 덮어쓰거나 수정하지 않습니다. 운영체제별 설치 경로와 실행법은 [사용자 설명서](COMMUNITY_GUIDE_KO.md#1-설치-환경)를 참고하세요. Windows/macOS 런타임은 검증되지 않았습니다.
 
@@ -20,6 +22,8 @@ Git 저장소의 생성 배포 산출물은 `dist/soop.py`입니다. 이를 Stre
 ## 동작과 사용
 
 기본 transport는 Grid 우선 `auto`입니다.
+
+`--soop-grid-purge-credentials`는 HLS 위임 시 내장 플러그인에 삭제를 요청합니다. Grid 로그인 쿠키는 저장하지 않으므로 Grid 모드에서 삭제할 Grid 쿠키 캐시는 없습니다.
 
 ```sh
 # Native Grid만
@@ -43,7 +47,7 @@ streamlink --soop-grid-transport auto \
 
 ## 개발자: 정본과 생성 파일
 
-`soop_grid/*.py`와 `plugins/soop_grid.py`가 개발용 정본입니다. `dist/soop.py`는 정적 AST 기반 Bundler가 생성하므로 직접 편집하지 않습니다.
+`soop_grid/*.py`와 `plugins/soop_grid.py`가 개발용 정본입니다. `dist/soop_grid.py`는 정적 AST 기반 Bundler가 생성하므로 직접 편집하지 않습니다.
 
 ```sh
 python tools/build_singlefile.py
