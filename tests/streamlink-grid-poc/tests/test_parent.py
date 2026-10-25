@@ -30,7 +30,7 @@ def test_parent_byte_order_and_bounds():
             parse_parents(body)
 
 
-def test_parent_sequence_capture_and_live_push(monkeypatch, tmp_path):
+def test_parent_sequence_capture_and_live_push(monkeypatch, tmp_path, encoded_bframes):
     import soop_grid.parent as parent
 
     class Net:
@@ -50,7 +50,8 @@ def test_parent_sequence_capture_and_live_push(monkeypatch, tmp_path):
         def release(self, sock):
             self.released = True
 
-    body = media_body(synthetic_sps())
+    payload, _ = encoded_bframes[0]
+    body = media_body(payload)
     wire = parent_packet(0xC748, body)
     frames = iter(
         [Frame(0xC746, b""), Frame(0xC747, b""), Frame(0xC748, body, wire=wire), Frame(0xC742, b"")]
@@ -66,10 +67,10 @@ def test_parent_sequence_capture_and_live_push(monkeypatch, tmp_path):
     sink.close()
     assert [struct.unpack_from("<H", x, 2)[0] for x in n.wires] == [0xCB2E, 0xCB2F, 0xCB30, 0xCB2B]
     assert struct.unpack_from("<IQI", n.wires[2], 16) == (1, 100, 0xFFFFFFFF)
-    assert (directory / "grid-payload.bin").read_bytes() == synthetic_sps()
+    assert (directory / "grid-payload.bin").read_bytes() == payload
     assert (directory / "grid-wire.bin").read_bytes() == wire
     assert (directory / "recording.ts").read_bytes() == b"".join(out)
-    assert json.loads((directory / "grid-analysis.json").read_text())["video"]["height"] == 1080
+    assert json.loads((directory / "grid-analysis.json").read_text())["video"]["height"] == 96
     assert n.released and "parent_c748_media_received" in events
 
 

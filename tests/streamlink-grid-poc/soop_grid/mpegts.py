@@ -31,11 +31,11 @@ def crc_mpeg(data):
     return crc
 
 
-def pts_bytes(value):
+def pts_bytes(value, prefix=2):
     v = value & ((1 << 33) - 1)
     return bytes(
         (
-            0x21 | ((v >> 29) & 14),
+            ((prefix & 15) << 4) | (((v >> 30) & 7) << 1) | 1,
             (v >> 22) & 255,
             ((v >> 14) & 254) | 1,
             (v >> 7) & 255,
@@ -54,6 +54,7 @@ class TSMux:
         self.preroll_video = 0
         self.first_pts = None
         self.last_pts = None
+        self.last_dts = None
 
     def packetize(self, pid, data, start=True, pcr=None):
         data = memoryview(data)
@@ -104,11 +105,73 @@ class TSMux:
         pmt = bytes.fromhex("02b0170001c10000e100f0001be100f0000fe101f000")
         return self.section(0, pat) + self.section(0x1000, pmt)
 
+    def _pes(self, video, pts, payload, dts=None, pcr=None):
+        out = b""
+        if not self.started:
+            return b""
+        if not 0 <= pts:
+            raise GridError("media_pts_bounds")
+        if dts is not None and not 0 <= dts:
+            raise GridError("media_dts_bounds")
+        if video and dts is not None and self.last_dts is not None and dts <= self.last_dts:
+            raise GridError("media_dts_not_monotonic")
+        out = b""
+        if video:
+            self.last_dts = dts
+            if self.video_frames and self.video_frames % 60 == 0:
+                out += self.tables()
+            self.video_frames += 1
+            if self.first_pts is None:
+                self.first_pts = pts
+            self.last_pts = pts
+        else:
+            self.audio_chunks += 1
+        if video and dts is not None:
+            flags, header_len = 0xC0, 10
+            timestamps = pts_bytes(pts, 3) + pts_bytes(dts, 1)
+        else:
+            flags, header_len = 0x80, 5
+            timestamps = pts_bytes(pts, 2)
+        length = 0 if video else len(payload) + 3 + header_len
+        if length > 65535:
+            raise GridError("aac_pes_limit")
+        pes = (
+            b"\0\0\1"
+            + bytes((0xE0 if video else 0xC0,))
+            + struct.pack(">H", length)
+            + bytes((0x80, flags, header_len))
+            + timestamps
+            + payload
+        )
+        return out + self.packetize(
+            0x100 if video else 0x101, pes, pcr=(dts if dts is not None else pcr) if video else None
+        )
+
+    def add_video(self, dts, pts, payload, *, idr=False):
+        if not self.started:
+            if not idr or not has_nal(payload, 7) or not has_nal(payload, 8) or not has_nal(payload, 5):
+                self.preroll_video += 1
+                return b""
+            self.started = True
+            out = self.tables()
+        else:
+            out = b""
+        return out + self._pes(True, pts, payload, dts)
+
+    def add_audio(self, pts, payload):
+        if not self.started or pts is None:
+            return b""
+        return self._pes(False, pts, payload)
+
     def add(self, kind, timestamp, payload):
+        """Legacy PTS-only serializer retained for Go golden-vector tests.
+
+        The receiver never calls this method: production media must use
+        ``add_video`` with independently derived PTS/DTS.
+        """
         video = kind in ("I", "P", "B")
         if not video and kind != "A":
             return b""
-        out = b""
         if not self.started:
             if not video:
                 return b""
@@ -118,31 +181,9 @@ class TSMux:
             self.started = True
             self.base = timestamp
             out = self.tables()
-        if (
-            timestamp > (1 << 63) - 1 - 10_000_000
-            or self.base > (1 << 63) - 1
-            or timestamp + 10_000_000 < self.base
-        ):
+        else:
+            out = b""
+        if timestamp > (1 << 63) - 1 - 10_000_000 or timestamp + 10_000_000 < self.base:
             raise GridError("media_timestamp_bounds")
         pts = (timestamp - self.base + 10_000_000) * 9 // 1000
-        if video:
-            if self.video_frames and self.video_frames % 60 == 0:
-                out += self.tables()
-            self.video_frames += 1
-            if self.first_pts is None:
-                self.first_pts = pts
-            self.last_pts = pts
-        else:
-            self.audio_chunks += 1
-        length = 0 if video else len(payload) + 8
-        if length > 65535:
-            raise GridError("aac_pes_limit")
-        pes = (
-            b"\0\0\1"
-            + bytes((0xE0 if video else 0xC0,))
-            + struct.pack(">H", length)
-            + b"\x80\x80\x05"
-            + pts_bytes(pts)
-            + payload
-        )
-        return out + self.packetize(0x100 if video else 0x101, pes, pcr=pts if video else None)
+        return out + self._pes(video, pts, payload, pcr=pts if video else None)

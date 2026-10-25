@@ -1,33 +1,94 @@
 # Architecture and protocol provenance
 
-The baseline is source.soop commit `3518f21c8feeb7b046562945ade6702e2803b450`, `tests/grid-poc/`. See its protocol and historical-validation documents. This port has no HLS fallback and advertises no peer listening port or media upload capability.
+The modular Python sources are canonical. They port the separately maintained Go
+Grid PoC and use Streamlink's public `Plugin`, `Stream`, and `StreamIO` interfaces.
+The plugin has a distinct `soopgrid` ID and matcher priority so the built-in `soop`
+plugin remains available for HLS delegation.
 
 ```text
-official Streamlink CLI -> sideload plugins/soop.py -> SoopGridStream.open()
-    -> private HTTP Cookie Jar / public Watch or authenticated TK + FTK
-    -> Gateway 0x03DF / 0x03E2 / 0x0415
-    -> Center 2 / 3 / 0x3E / 0x14 / 0x2A / 0x46
-    -> handle / Parent discovery 0x50 / 0x69
-    -> Parent 0xCB2E / 0xCB2F / 0xCB30; 0xC742 -> 0xCB2B
-    -> actual 0xC748 -> unchanged H.264 / AAC -> Python TS muxer
-    -> bounded buffer -> StreamIO.read() -> Streamlink file/stdout/player output
+Streamlink
+  └─ soopgrid plugin
+      ├─ grid: first-party HTTP bootstrap -> Gateway -> Center -> Parent
+      │                                  -> 0xC748 -> H.264/AAC -> one TS mux
+      ├─ hls: delegates to Streamlink's built-in SOOP plugin
+      └─ auto: Grid; initial transport-only failure may select built-in HLS
 ```
 
-`protocol.py` bounds headers and bodies independently for Gateway (16-byte LE32 header), Center (20-byte LE32 header), and Parent (16-byte LE16/LE32 header, version 0x0202). Socket reads use whole-frame deadlines. Only globally routable addresses supplied through the normal session are connected to.
+The receive path is download-only. It does not listen for peers, upload media,
+modify Streamlink, or invoke a Go process or official SOOP agent.
 
-`crypto.py` ports the native RIPEMD-128 finalizer quirk (first remainder bytes reused after complete blocks), not a replacement standard hash. Service 6 and Center auth reproduce the Go mixers and AES-CTR zero-padding. A certificate must contain a server-issued seed whose digest validates; the runtime never creates a substitute server credential. Test seeds are synthetic and never used for live connections.
+## Protocol and session safety
 
-The authenticated path uses private first-party requests and normal Cookie Jar scoping, with no credential cache. Live metadata `TK` (or scoped `AuthTicket`) and `FTK` are distinct from the anonymous Watch ticket. The password is only part of Center JOIN. Denial ends the operation.
+`protocol.py` keeps separate bounded framing for Gateway, Center, and Parent. A
+normal server-issued Gateway certificate is checked before use. Center rediscovery
+uses the new Center-issued node key. Credentials and tickets are kept in memory and
+cleared after bootstrap; silent account reauthentication is not implemented.
+Broadcast passwords are sent only in Center JOIN. Explicit server denial is terminal.
 
-`media.py` validates the observed 69-byte Grid body header, zero extension, exact payload length, frame kind and raw 100-ns timestamp. It preserves received bytes and optionally extracts SPS dimensions/cropping and ADTS metadata. `mpegts.py` ports PAT/PMT/CRC, PID 0x100 video / 0x101 audio, PES, PTS/PCR and continuity counters. Playable TS starts at SPS plus IDR; all preroll remains in raw/elementary files. There is no independent DTS reconstruction beyond the Go baseline's PTS-only PES behavior.
+Anonymous public bootstrap does not enumerate live-list pages. It validates the
+requested channel and optional BNO, directly checks Live metadata, verifies BJID and
+BNO, checks password and any explicit restriction fields, and submits the exact BNO
+to the normal Watch API. Only a positive server result and valid returned endpoint
+and ticket proceeds. The Live schema does not expose every policy flag; absence of a
+restriction field is not inferred as permission, so the Watch response is
+authoritative. Automatic BNO switching is never done.
 
-`SoopGridReader` owns one worker and tracked sockets. The bounded byte buffer splits oversized writes, waits for consumers and fails on sustained backpressure. Open waits for actual TS output. Partial reads drain pending bytes before EOF or a stored error. Open failures use StreamError; read failures use OSError, as required by Streamlink 8.6.2's output runner. Close cancels producers, wakes readers, shuts down sockets, and joins the worker (HTTP request operations have bounded timeouts). `read(-1)` drains at most the configured buffer capacity; Streamlink's runner uses positive read sizes.
+`parent.py` uses one active Parent. Transport EOF, reset, timeout, or stall can move
+to another Center-issued candidate and then perform at most one fresh Center
+rediscovery per outage. Explicit denials and malformed protocol data do not retry.
+The capture budget, if configured, is a single deadline for Parent connections,
+handshakes, backoff and rediscovery; bootstrap occurs before this budget and has
+its own bounded HTTP/network operation timeouts.
 
-API references inspected from the official installed Streamlink 8.6.2 package:
+## Recovery limits
 
-- [Stream and StreamIO](https://github.com/streamlink/streamlink/blob/8.6.2/src/streamlink/stream/stream.py)
-- [TwitCasting custom reader](https://github.com/streamlink/streamlink/blob/8.6.2/src/streamlink/plugins/twitcasting.py)
-- [SOOP first-party authentication](https://github.com/streamlink/streamlink/blob/8.6.2/src/streamlink/plugins/soop.py)
-- [CLI output runner](https://github.com/streamlink/streamlink/blob/8.6.2/src/streamlink_cli/streamrunner.py)
+On reconnect, the receiver asks for the last accepted frame as an overlap anchor.
+It accepts recovery only when frame number, kind, raw timestamp and SHA-256 payload
+match, then requires exact next-frame numbering and nondecreasing per-stream time.
+The muxer and timestamp origin are retained. Missing overlap, sequence reset, changed
+quality/identity, timestamp regression, or conflicting data terminates output and
+records a gap. No frame is fabricated. This behavior is offline/loopback-tested;
+live SOOP cache overlap and natural Parent failure have not been verified.
 
-The official installed package's Python source hashes are checked against its wheel RECORD by the test suite. No Streamlink core source is patched or distributed here.
+Active-active Parent reception and cross-Parent aggregation are deliberately absent.
+The protocol's simultaneous-session limit, node-key scope and shared sequence space
+remain unverified. Multiple Parent connections will not be attempted speculatively.
+
+## H.264 timeline and MPEG-TS
+
+`media.py` validates the observed Grid chunk header and preserves original payload
+bytes. `h264clock.py` currently supports progressive Annex-B H.264, POC type 0,
+non-FMO PPS, one picture per Grid video chunk and fixed-frame-rate VUI timing. It
+derives display order from POC and decode order from the observed Grid 100-ns
+timestamp. It rejects absent/unsupported timing, interlacing, unsupported POC mode,
+codec-configuration changes, nonmonotonic Grid video time, and PTS-before-DTS rather
+than guessing from a nominal FPS. SPS DPB/reorder bounds constrain POC movement.
+
+`mpegts.py` emits PTS+DTS PES headers for video, PTS for AAC, and PCR from video DTS;
+timestamps are serialized in the standard 33-bit clock domain. It retains PAT/PMT,
+PIDs and continuity counters. The output begins only when SPS/PPS/IDR are available.
+Raw H.264 and AAC payloads are never transcoded. The legacy PTS-only `TSMux.add()`
+exists only for old Go golden-vector parity tests and is not called by live receive.
+
+An offline synthetic B-frame/AAC stream and a historical private Grid capture were
+fully decoded without nonmonotonic-DTS diagnostics after the timeline change. This
+does not establish all H.264 profiles, arbitrary Grid timestamp semantics, subjective
+A/V sync, or long-session clock-wrap behavior. Unsupported structures fail closed.
+
+## Bounded resources and output
+
+`StreamIO` uses a bounded ring-buffer-sized byte queue (maximum 16 MiB), bounded
+network frame sizes, bounded packet/control loops between media progress, one
+rediscovery per outage, and cancellable backoff. The cumulative lifetime media byte
+cap is optional; the duration cap is optional. Neither disables finite queues or
+per-operation timeouts. Closing the reader cancels sockets and backpressure waits.
+The receiver does not retain all recorded media in memory.
+
+Streamlink HLS uses its maintained built-in plugin. `auto` only switches before any
+Grid TS output and only on an allowlisted initial transport error; it does not mask
+authorization, protocol, codec, or media-continuity failures. It never appends HLS
+bytes to an already-started Grid TS timeline.
+
+API references inspected from Streamlink 8.6.2 include its official Stream/StreamIO,
+SOOP, and TwitCasting plugin implementations. No Streamlink source is patched or
+vendored.

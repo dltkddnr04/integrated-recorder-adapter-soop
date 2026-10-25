@@ -4,7 +4,7 @@ import pytest
 
 from conftest import synthetic_sps
 from soop_grid.media import adts_info, sps_info
-from soop_grid.mpegts import TSMux, crc_mpeg
+from soop_grid.mpegts import TSMux, crc_mpeg, pts_bytes
 from soop_grid.protocol import GridError
 
 
@@ -44,6 +44,11 @@ def test_pat_pmt_crc_and_timestamp_bounds():
     m.add("I", 50_000_000, synthetic_sps())
     with pytest.raises(GridError):
         m.add("P", 1, b"\0\0\1\x41")
+
+
+def test_pts_dts_timestamp_serialization_wraps_at_33_bits():
+    wrap = 1 << 33
+    assert pts_bytes(wrap + 12345) == pts_bytes(12345)
 
 
 def test_sps_cropping_and_adts_metadata(golden):

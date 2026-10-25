@@ -1,5 +1,12 @@
 # Reliability and single-file result — 2026-10-25
 
+> Historical snapshot: this report documents the pre-production-readiness revision.
+> Its then-current PTS-only/DTS-limited implementation, finite 1–60 second/512 MiB
+> limits, old plugin replacement behavior, and 145-test count were superseded by the
+> subsequent revision. See [PRODUCTION_READINESS_RESULT.md](PRODUCTION_READINESS_RESULT.md)
+> for current code and verification. The prior live measurement below remains a
+> historical observation and is not reclassified as a current-code live test.
+
 Base repository commit: `8987d8811a9b7ac5b6144eca461637e171313572`.
 Changes are limited to this Python PoC. The Go PoC, production adapter, Streamlink
 core and original research archives were not changed. No media/credentials are

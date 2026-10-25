@@ -29,14 +29,18 @@ def test_actual_plugin_discovery_and_grid_stream_enumeration(url):
     session = Streamlink()
     assert session.plugins.load_path(str(ROOT / "plugins"))
     name, cls, resolved = session.resolve_url(url)
-    assert name == "soop" and cls.__name__ == "SoopGrid"
+    assert name == "soopgrid" and cls.__name__ == "SoopGridPlugin"
     plugin = cls(session, resolved)
     streams = plugin.streams()
-    assert streams["original"].shortname() == "grid"
-    assert streams["original"].config.broadcaster == "fixture_channel"
+    assert streams["original"].shortname() == "auto"
+    assert streams["original"].grid.config.broadcaster == "fixture_channel"
+    assert cls(session, resolved, options={"transport": "grid"}).streams()["original"].shortname() == "grid"
+    session.plugins.load_builtin()
+    assert session.plugins.get_loaded()["soop"].__name__ == "Soop"
+    assert session.plugins.get_loaded()["soopgrid"] is cls
 
 
-def test_cli_sideload_from_unrelated_directory_without_pythonpath(tmp_path):
+def test_modular_cli_sideload_from_unrelated_directory(tmp_path):
     env = os.environ.copy()
     for k in (
         "PYTHONPATH",
@@ -46,12 +50,13 @@ def test_cli_sideload_from_unrelated_directory_without_pythonpath(tmp_path):
         "SOOP_GRID_CAPTURE_DIR",
     ):
         env.pop(k, None)
+    env["PYTHONPATH"] = str(ROOT)
     p = subprocess.run(
         [
             sys.executable,
             "-m",
             "streamlink_cli",
-            "--plugin-dirs",
+            "--plugin-dir",
             str(ROOT / "plugins"),
             "--json",
             "https://play.sooplive.com/fixture_channel/12345",
@@ -64,11 +69,12 @@ def test_cli_sideload_from_unrelated_directory_without_pythonpath(tmp_path):
     )
     assert p.returncode == 0, p.stderr
     root = json.loads(p.stdout)
-    assert root["streams"]["original"]["type"] == "grid"
+    assert root["streams"]["original"]["type"] == "auto"
 
 
 def test_cli_debug_enumeration_does_not_log_secret_environment_values(tmp_path):
     env = os.environ.copy()
+    env["PYTHONPATH"] = str(ROOT)
     env.update(
         SOOP_ACCOUNT_ID="fixture_account",
         SOOP_ACCOUNT_PASSWORD="fixture-private-password",
@@ -105,19 +111,30 @@ def test_secrets_are_not_serialized_and_consumed_from_environment(monkeypatch):
     session.plugins.load_path(str(ROOT / "plugins"))
     _, cls, url = session.resolve_url("https://play.sooplive.com/fixture_channel/12345")
     stream = cls(session, url).streams()["original"]
-    assert stream.config.account_password == "fixture-private-password"
+    assert stream.grid.config.account_password == "fixture-private-password"
     assert "SOOP_ACCOUNT_PASSWORD" not in os.environ and "SOOP_STREAM_PASSWORD" not in os.environ
     assert "fixture" not in repr(stream) and "fixture" not in stream.json
-    stream.config.clear()
+    stream.grid.config.clear()
 
 
-@pytest.mark.parametrize("duration", [0, -1, 61])
-def test_cli_duration_bounds_are_not_silently_replaced(duration):
+@pytest.mark.parametrize("duration", [0, -1])
+def test_cli_duration_rejects_nonpositive_limits(duration):
     session = Streamlink()
     session.plugins.load_path(str(ROOT / "plugins"))
     _, cls, url = session.resolve_url("https://play.sooplive.com/fixture_channel/12345")
     with pytest.raises(PluginError, match="capture_duration_bounds"):
         cls(session, url, options={"grid-duration": duration}).streams()
+
+
+def test_cli_duration_default_is_unlimited_and_explicit_values_are_not_capped():
+    session = Streamlink()
+    session.plugins.load_path(str(ROOT / "plugins"))
+    url = "https://play.sooplive.com/fixture_channel/12345"
+    cls = session.resolve_url(url)[1]
+    assert cls(session, url).streams()["original"].grid.config.duration is None
+    assert (
+        cls(session, url, options={"grid-duration": 3600}).streams()["original"].grid.config.duration == 3600
+    )
 
 
 def test_official_streamlink_python_sources_match_wheel_record():

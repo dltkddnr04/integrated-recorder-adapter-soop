@@ -66,3 +66,34 @@ public target absent from the first list page. Its 188 C748 packets yielded
 warnings remain in timestamped-output validation. See
 [RELIABILITY_RESULT.md](RELIABILITY_RESULT.md) for measurements and distinctions.
 This does not supersede previous captures' own measurements or imply live failover.
+
+## Production-readiness revision — 2026-10-25
+
+The later source revision adds supported-subset H.264 DTS/PTS reconstruction,
+continuous default capture with optional time/byte bounds, exact-overlap single-Parent
+failover, and built-in HLS delegation through a distinct `soopgrid` plugin ID. The
+previous live capture above used the earlier PTS-only revision; it is historical
+evidence and was not captured again with this revision.
+
+An already preserved private Grid capture was reparsed through the new H.264 clock
+and TS muxer: 188 media chunks, H.264 1920×1080 at 30 fps, AAC 44.1 kHz stereo, and a
+3,023,792-byte TS. The video PTS reorders according to H.264 POC while DTS increases
+in Grid decode order. FFmpeg 9 full video+audio decode with `-xerror` exited 0 with no
+diagnostics, including no nonmonotonic-DTS warning. This is a reprocessing of a
+historical private input, not a new live capture. The Grid timestamp-to-clock model
+is supported by this sample and synthetic fixtures; broad source compatibility and
+perceptual A/V sync are not established.
+
+Current offline suite: 159 tests pass when the isolated loopback socket tests are
+allowed. In the default sandbox those local sockets are denied with EPERM; the same
+subset passes when run with local socket permission. A clean virtual environment with
+Streamlink 8.6.2 only (plus its own dependencies), no project package, no PYTHONPATH,
+and a copied `dist/soop.py` installed as `soopgrid.py` passes plugin discovery and
+JSON stream enumeration. The bundle is reproducible and source/bundle regression
+tests pass. Current Linux live tests were not run for this revision.
+
+Current status: HLS delegation is verified with an offline mocked official plugin,
+but fresh network HLS behavior is not revalidated. Parent failover/cache overlap is
+synthetic and local-loopback verified only. Simultaneous multi-Parent reception,
+30-minute/3-hour/6-hour recording, automatic reauthentication, and Windows/macOS
+runtime loading are not verified. See [PRODUCTION_READINESS_RESULT.md](PRODUCTION_READINESS_RESULT.md).

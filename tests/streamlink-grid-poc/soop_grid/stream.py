@@ -4,6 +4,7 @@
 
 import threading
 import time
+import logging
 
 from streamlink.exceptions import StreamError
 from streamlink.stream.stream import Stream, StreamIO
@@ -15,6 +16,20 @@ from .gateway import obtain_certificate
 from .media import MediaSink
 from .parent import receive_media
 from .protocol import Cancelled, GridError, Network
+
+
+_log = logging.getLogger("streamlink.plugins.soopgrid")
+_INITIAL_TRANSPORT_FAILURES = {
+    "tcp_connect_failed",
+    "peer_closed_or_truncated",
+    "network_read_failed",
+    "network_read_timeout",
+    "network_write_failed",
+    "parent_media_stalled",
+    "parent_retry_limit",
+    "parent_rediscovery_empty",
+    "no_usable_server_parent",
+}
 
 
 class BoundedBuffer:
@@ -101,6 +116,7 @@ def receive(config, network, emit, report, stats):
             sink,
             report,
             config.duration,
+            config.max_bytes,
             rediscover=lambda: discover_parent(network, session.center, credentials, report),
         )
         if not sink.mux.video_frames:
@@ -131,6 +147,7 @@ class SoopGridReader(StreamIO):
         self.stages = []
         self._close_lock = threading.Lock()
         self._closing = False
+        self.failure_code = None
 
     def open(self):
         if self.thread is not None or self.closed:
@@ -139,8 +156,10 @@ class SoopGridReader(StreamIO):
         self.thread.start()
         try:
             self.buffer.wait_ready()
-        except Exception:
+        except Exception as error:
             self.close()
+            if self.failure_code and error is not None:
+                error.grid_error_code = self.failure_code
             raise
         return self
 
@@ -151,6 +170,7 @@ class SoopGridReader(StreamIO):
         except Exception as exc:
             # Never expose raw HTTP/socket exceptions or arbitrary worker text.
             code = str(exc) if isinstance(exc, GridError) else "receiver_internal_failure"
+            self.failure_code = code
             if not self._closing:
                 error = StreamError("SOOP Grid: " + code)
         finally:
@@ -204,3 +224,78 @@ class SoopGridStream(Stream):
             raise StreamError("Grid streams are single-session; enumerate again to reopen")
         self._opened = True
         return SoopGridReader(self).open()
+
+
+class OfficialHLSFallback:
+    """Lazy, one-shot delegation to Streamlink's maintained SOOP plugin."""
+
+    def __init__(self, session, url, account, password, stream_password):
+        self.session, self.url, self.account = session, url, account
+        self.password, self.stream_password = password, stream_password
+        self.used = False
+
+    def __repr__(self):
+        return "<OfficialHLSFallback credentials=redacted>"
+
+    def clear(self):
+        self.password = self.stream_password = self.account = ""
+
+    def open(self):
+        if self.used:
+            raise StreamError("Official SOOP HLS fallback is single-use")
+        self.used = True
+        try:
+            self.session.plugins.load_builtin()
+            plugin_class = self.session.plugins.get_loaded().get("soop")
+            if plugin_class is None:
+                raise StreamError("Streamlink built-in SOOP plugin is unavailable")
+            plugin = plugin_class(
+                self.session,
+                self.url,
+                options={
+                    "username": self.account,
+                    "password": self.password,
+                    "stream-password": self.stream_password,
+                },
+            )
+            streams = plugin.streams()
+            selected = streams.get("original") or next(iter(streams.values()), None)
+            if selected is None:
+                raise StreamError("Official SOOP HLS plugin returned no playable stream")
+            return selected.open()
+        finally:
+            self.clear()
+
+
+class SoopAutoStream(Stream):
+    """Grid-first stream; only pre-output transport failures can select HLS."""
+
+    __shortname__ = "auto"
+
+    def __init__(self, session, grid, fallback):
+        super().__init__(session)
+        self.grid = grid
+        self.fallback = fallback
+        self._opened = False
+
+    def open(self):
+        if self._opened:
+            raise StreamError("SOOP auto streams are single-session; enumerate again to reopen")
+        self._opened = True
+        try:
+            reader = self.grid.open()
+            if self.fallback:
+                self.fallback.clear()
+            return reader
+        except StreamError as exc:
+            if getattr(exc, "grid_error_code", None) not in _INITIAL_TRANSPORT_FAILURES:
+                if self.fallback:
+                    self.fallback.clear()
+                raise
+            if self.fallback is None:
+                raise
+            _log.warning("Native Grid unavailable before media output; starting the official SOOP HLS stream")
+            try:
+                return self.fallback.open()
+            finally:
+                self.fallback.clear()

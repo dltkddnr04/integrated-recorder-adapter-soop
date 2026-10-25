@@ -17,7 +17,8 @@ class Config:
     account_password: str = field(default="", repr=False)
     stream_password: str = field(default="", repr=False)
     require_adult: bool = False
-    duration: float = 35
+    duration: float | None = None
+    max_bytes: int | None = None
     capture_dir: str | None = field(default=None, repr=False)
 
     def validate(self):
@@ -31,8 +32,10 @@ class Config:
             if not 0 < int(self.bno) <= 0xFFFFFFFF:
                 raise GridError("broadcast_number_bounds")
             self.bno = str(int(self.bno))
-        if not 1 <= self.duration <= 60:
+        if self.duration is not None and (type(self.duration) not in (int, float) or self.duration <= 0):
             raise GridError("capture_duration_bounds")
+        if self.max_bytes is not None and (type(self.max_bytes) is not int or self.max_bytes <= 0):
+            raise GridError("capture_byte_limit_bounds")
         if (
             bool(self.account) != bool(self.account_password)
             or (self.require_adult or self.stream_password)

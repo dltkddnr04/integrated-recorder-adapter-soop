@@ -9,6 +9,7 @@ import struct
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .h264clock import H264Clock
 from .mpegts import TSMux, nals
 from .protocol import GridError
 
@@ -172,6 +173,7 @@ class MediaSink:
     def __init__(self, emit, capture_dir=None):
         self.emit = emit
         self.mux = TSMux()
+        self.video_clock = H264Clock()
         self.files = {}
         self.path = Path(capture_dir) if capture_dir else None
         self.owns_directory = False
@@ -224,6 +226,7 @@ class MediaSink:
         if chunk.kind in ("I", "P", "B"):
             self.write("video.h264", chunk.payload)
             self.stats["video_frames"] += 1
+            timing = self.video_clock.inspect(chunk.payload, chunk.timestamp)
             if "video" not in self.stats:
                 info = sps_info(chunk.payload)
                 if info:
@@ -233,7 +236,16 @@ class MediaSink:
             self.stats["audio_frames"] += 1
             if "audio" not in self.stats:
                 self.stats["audio"] = adts_info(chunk.payload)
-        ts = self.mux.add(chunk.kind, chunk.timestamp, chunk.payload)
+        ts = b""
+        if chunk.kind in ("I", "P", "B"):
+            if timing is not None:
+                ts = self.mux.add_video(timing["dts"], timing["pts"], chunk.payload, idr=timing["idr"])
+                self.stats["last_video_dts_90k"] = timing["dts"]
+                self.stats["last_video_pts_90k"] = timing["pts"]
+                self.stats["last_video_slice_type"] = timing["slice_type"]
+                self.stats["last_video_poc"] = timing["poc"]
+        else:
+            ts = self.mux.add_audio(self.video_clock.audio_pts(chunk.timestamp), chunk.payload)
         if ts:
             self.write("recording.ts", ts)
             self.emit(ts)
@@ -246,6 +258,16 @@ class MediaSink:
                         "type": chunk.kind,
                         "timestamp_raw": chunk.timestamp,
                         "payload_bytes": len(chunk.payload),
+                        **(
+                            {
+                                "pts_90k": timing["pts"],
+                                "dts_90k": timing["dts"],
+                                "poc": timing["poc"],
+                                "slice_type": timing["slice_type"],
+                            }
+                            if chunk.kind in ("I", "P", "B") and timing is not None
+                            else {}
+                        ),
                     }
                 )
                 + "\n"

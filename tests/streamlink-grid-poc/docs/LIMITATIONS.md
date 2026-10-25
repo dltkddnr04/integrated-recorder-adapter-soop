@@ -1,32 +1,46 @@
-# Limitations and licensing
+# Limitations, support boundaries, and licensing
 
-- Experimental, bounded Native TCP Grid sessions only: 1–60 seconds, 512 MiB media wire ceiling, no long-duration stability or reconnect guarantee.
-- Public anonymous live capture was verified in Python. Native account TK/FTK, adult confirmation, and password Center JOIN were ported and tested offline; those protected Python live paths remain NOT_TESTED. Historical Go success does not prove Python live success.
-- No subscriber-only or paid access support is asserted. Server denials are not bypassed.
-- The public Watch route uses direct exact-target Live/Watch validation without a listing. Live metadata does not expose every listing policy; explicit Watch permission is required. Channel-only URLs require the ordinary page's live BNO marker. URL enumeration is not a media-access check.
-- Only the observed Annex-B H.264 plus ADTS AAC layout with a zero extension is accepted. HEVC and other codecs are not supported. Quality codes do not prove resolution.
-- TS starts at a received SPS/IDR. Earlier data remains in raw files. PTS-only PES matches the Go PoC; independent DTS/reordering handling is not implemented. Arbitrary B-frame streams are not a general compatibility claim.
-- HTTP bootstrap close is limited by underlying HTTP/DNS timeouts; active binary TCP sockets are explicitly shut down. The worker is daemonized and close waits up to 12 seconds. This does not claim instant interruption of every OS resolver failure.
-- Interactive VLC/mpv playback and protected-stream live tests were not performed. File/stdout plus whole-file decoding are the demonstrated playback evidence.
-- The prior Go password test's one-frame MP4 decode-count difference remains unexplained. This Python validation uses original TS as its reference; stream-copy remux is optional and not an encoding step.
-- Python immutable strings/bytes cannot provide guaranteed memory erasure. Secrets are kept in memory, references are dropped, secret environment entries are removed, and cookies are never written to disk. Debugging tools outside this plugin can still inspect process memory.
+- Experimental community plugin, not integrated into the production Source Adapter.
+- Multi-Parent active-active and cross-parent aggregation are not implemented; live
+  concurrency, node-key scope, and shared frame sequence are unverified.
+- Single-Parent failover and exact-overlap cache recovery passed synthetic/loopback
+  tests, but live SOOP Parent failover and server cache overlap are not verified.
+  Missing overlap or any unprovable gap ends the current output with an error.
+- Continuous-duration capture is implemented with bounded queues, but multi-hour
+  live durability, session reauthentication, crash resume, and broadcast rollover
+  are not verified. No automatic certificate refresh is performed.
+- Current muxer supports progressive Annex-B H.264 with POC type 0, fixed VUI frame
+  timing, supported SPS/PPS/slice subset, and one picture per Grid video chunk. Other
+  timing/POC/interlace layouts fail closed. HEVC and other video codecs are not
+  supported. Audio is observed ADTS AAC.
+- DTS reconstruction uses Grid's observed decode-order timestamp and H.264 POC for
+  presentation order. Synthetic B-frame and one historical private captured stream
+  decode cleanly; arbitrary broadcaster clock semantics, long-run wrap/drift and
+  perceptual A/V sync are not exhaustively validated.
+- `auto` HLS fallback is only for allowlisted Grid transport failures before Grid
+  bytes are emitted. It is not a protocol bridge and will not hide auth denial,
+  malformed packets, unsupported media, or a gap after output begins.
+- HLS behavior is delegated to Streamlink's built-in SOOP plugin. HLS transport has
+  not been freshly live-tested in this revision.
+- Linux / Python 3.12.3 / Streamlink 8.6.2 single-file runtime is tested. macOS and
+  Windows install paths are documented but runtime loading is not tested here.
+- Python strings/bytes cannot guarantee memory zeroization. Secrets are not logged
+  or persisted by the plugin, but process-memory inspection is outside its control.
+- Long recording writes through Streamlink output. Disk-full, abrupt power loss,
+  filesystem durability and crash recovery are not claimed.
 
-## License / future upstream work
+## License and provenance
 
-The Python implementation and synthetic tests are derived from this project's Go PoC and are distributed under **AGPL-3.0-only**, with the repository license copied into this standalone package. New source files identify source.soop contributors. The referenced public protocol studies are listed in the Go PoC; no proprietary SOOP binaries, decompilation dumps, or third-party source files are bundled.
+The PoC is distributed under **AGPL-3.0-only** and derives from this project's Go
+Grid implementation and Python port. The repository contains no proprietary SOOP
+binaries, decompilation dumps, live credentials, raw broadcasts, or third-party
+implementation source. Public protocol studies are attributed in the Go PoC.
 
-Streamlink is used through its normal package and public plugin interfaces under its own BSD license. PyCryptodome is Streamlink's normal AES dependency and retains its own license. No dependency code is relabeled as AGPL or vendored here. The plugin design consulted the official SOOP/TwitCasting/Stream classes; it does not copy the complete built-in SOOP plugin or implement its HLS features.
+Streamlink is consumed via its normal public plugin interfaces and its own installed
+package; its code is not copied or relicensed. HLS delegation uses the installed
+built-in SOOP plugin. PyCryptodome is likewise an external normal dependency.
 
-A future Streamlink upstream contribution cannot present this AGPL-derived code as BSD. It would require permission/relicensing from all relevant rights holders, including the Go implementation's contributors, or a separately reviewed implementation under suitable terms. No upstream PR is part of this work.
-
-Bounded Parent recovery is synthetic/loopback-tested, not live-failover verified.
-It requires exact cached overlap and consecutive frames; unprovable gaps terminate.
-Automatic certificate refresh and TS discontinuity restart are not implemented.
-See [RELIABILITY.md](RELIABILITY.md).
-
-Single-file runtime was tested on Linux/Python 3.12/Streamlink 8.6.2 only; macOS and
-Windows installation paths follow official Streamlink source but were not run here.
-A new 1080p30 source contained B-frames. Its raw H.264/AAC and TS decoded fully, but
-FFmpeg's timestamped null-output check reported non-monotonic DTS. Independent DTS
-reconstruction is still absent. Zero frame-number gaps does not establish perfect
-presentation timing or A/V sync. Do not infer lossless live failover from this test.
+The AGPL implementation cannot be represented as Streamlink's BSD-licensed code for
+an upstream contribution. Reuse under other licensing would require review and
+permission from relevant rights holders. No upstream Streamlink contribution is part
+of this PoC.

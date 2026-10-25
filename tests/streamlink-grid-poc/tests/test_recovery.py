@@ -9,9 +9,42 @@ import threading
 import pytest
 
 from conftest import media_body, synthetic_sps
-from soop_grid.media import MediaSink
+from soop_grid.media import MediaSink, parse_media
 from soop_grid.parent import Parent, receive_media
 from soop_grid.protocol import Cancelled, GridError, parent_packet
+
+
+class SyntheticSink:
+    """Protocol-only sink; media bytes in these tests are intentionally fake."""
+
+    class Mux:
+        def __init__(self):
+            self.video_frames = 0
+            self.cc = {}
+
+    def __init__(self, emit):
+        self.emit = emit
+        self.mux = self.Mux()
+        self.stats = {"wire_bytes": 0, "media_packets": 0, "video_frames": 0, "audio_frames": 0}
+
+    def add(self, frame, discard=False):
+        chunk = parse_media(frame.body)
+        self.stats["wire_bytes"] += len(frame.wire)
+        self.stats["media_packets"] += 1
+        if discard:
+            return chunk
+        if chunk.kind in ("I", "P", "B"):
+            self.stats["video_frames"] += 1
+            self.mux.video_frames += 1
+            self.mux.cc[0x100] = (self.mux.cc.get(0x100, 0) + 1) & 15
+        else:
+            self.stats["audio_frames"] += 1
+            self.mux.cc[0x101] = (self.mux.cc.get(0x101, 0) + 1) & 15
+        self.emit(struct.pack(">Q", chunk.frame))
+        return chunk
+
+    def close(self):
+        pass
 
 
 def media(number, timestamp=None, payload=None, kind="I"):
@@ -92,10 +125,10 @@ def simulation(monkeypatch):
     clock = [0]
     monkeypatch.setattr(parent.time, "monotonic", lambda: clock[0])
 
-    def run(scripts, rediscover=None, count=None):
+    def run(scripts, rediscover=None, count=None, sink_class=SyntheticSink):
         network = SyntheticNetwork(scripts, clock)
         out, events = [], []
-        sink = MediaSink(out.append)
+        sink = sink_class(out.append)
         candidates = [Parent(("8.8.8.8", 10000 + n), 1, 0) for n in range(count or len(scripts))]
         try:
             receive_media(network, candidates, 12345, 42, sink, events.append, 35, rediscover=rediscover)
@@ -117,7 +150,7 @@ def test_first_connect_failure_uses_next_candidate(simulation):
 
 @pytest.mark.parametrize("failure", ["eof", "reset", "timeout"])
 def test_cache_overlap_recovers_without_resetting_mux(simulation, failure):
-    baseline = MediaSink(lambda _: None)
+    baseline = SyntheticSink(lambda _: None)
     from soop_grid.protocol import Frame
 
     for n in (1, 2, 3):
@@ -136,7 +169,7 @@ def test_cache_overlap_recovers_without_resetting_mux(simulation, failure):
     assert sink.stats["recovered_ranges"] == 1
     assert sink.mux.cc == baseline.mux.cc
     expected = []
-    baseline = MediaSink(expected.append)
+    baseline = SyntheticSink(expected.append)
     for n in (1, 2, 3):
         wire = media(n)
         baseline.add(Frame(0xC748, wire[16:], wire=wire))
@@ -212,6 +245,50 @@ def test_global_deadline_does_not_restart_on_failover(simulation):
         simulation([(controls() + media(1), "eof"), (b"", "deadline")])
 
 
+def test_unbounded_session_packet_window_resets_after_accepted_media(monkeypatch):
+    import soop_grid.parent as parent
+    from soop_grid.protocol import Frame
+
+    stop = threading.Event()
+    calls = [0]
+
+    class Net:
+        def __init__(self):
+            self.stop = stop
+
+        def connect(self, address):
+            return object()
+
+        def send(self, *args):
+            pass
+
+        def release(self, *args):
+            pass
+
+    def next_packet(*_args):
+        calls[0] += 1
+        if calls[0] > 8192:
+            stop.set()
+        packet = media(calls[0])
+        return Frame(0xC748, packet[16:], wire=packet)
+
+    monkeypatch.setattr(parent, "read_frame", next_packet)
+    sink = SyntheticSink(lambda _: None)
+    receive_media(
+        Net(),
+        [Parent(("8.8.8.8", 10000), 1, 0)],
+        12345,
+        42,
+        sink,
+        lambda _: None,
+        duration=None,
+        max_bytes=None,
+    )
+    assert calls[0] == 8193
+    assert sink.stats["parent_packets"] == 8193
+    assert sink.stats["video_frames"] == 8193
+
+
 @pytest.mark.parametrize(
     "wire,code",
     [
@@ -281,7 +358,7 @@ def test_real_local_tcp_parent_disconnect_and_overlap_recovery():
             return sock
 
     network = LocalNetwork()
-    sink = MediaSink(lambda _: None)
+    sink = SyntheticSink(lambda _: None)
     try:
         receive_media(
             network, [Parent(x, 1, 0) for x in servers], 12345, 42, sink, lambda _: None, duration=1
@@ -295,8 +372,8 @@ def test_real_local_tcp_parent_disconnect_and_overlap_recovery():
     assert not network._sockets
 
 
-def test_recovered_ts_decodes_in_full(simulation, tmp_path):
-    """Generated test pattern/audio, never a real broadcast fixture."""
+def test_recovered_ts_decodes_in_full(simulation, tmp_path, encoded_bframes):
+    """Generated B-frame/AAC input verifies DTS, PTS, and complete decoding."""
     import os
     import shutil
     import subprocess
@@ -304,31 +381,12 @@ def test_recovered_ts_decodes_in_full(simulation, tmp_path):
     ffmpeg = os.environ.get("SOOP_TEST_FFMPEG") or shutil.which("ffmpeg")
     if not ffmpeg:
         pytest.skip("optional FFmpeg post-validation tool unavailable")
-    video, audio = tmp_path / "generated.h264", tmp_path / "generated.aac"
+    audio = tmp_path / "generated.aac"
 
     def run(args):
         p = subprocess.run([ffmpeg, "-v", "error", "-nostdin", *args], capture_output=True, timeout=20)
         assert p.returncode == 0, p.stderr.decode()
 
-    run(
-        [
-            "-f",
-            "lavfi",
-            "-i",
-            "testsrc2=size=160x96:rate=10",
-            "-t",
-            "1",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "ultrafast",
-            "-x264-params",
-            "keyint=10:aud=1",
-            "-f",
-            "h264",
-            str(video),
-        ]
-    )
     run(
         [
             "-f",
@@ -344,15 +402,7 @@ def test_recovered_ts_decodes_in_full(simulation, tmp_path):
             str(audio),
         ]
     )
-    import re
-
-    data = video.read_bytes()
-    aud = [m.start() for m in re.finditer(b"\x00\x00(?:\x00)?\x01\x09", data)]
-    assert len(aud) == 10
-    samples = [
-        (i * 1_000_000, data[start : aud[i + 1] if i + 1 < len(aud) else len(data)], "I" if i == 0 else "P")
-        for i, start in enumerate(aud)
-    ]
+    samples = [(i * 333_333, payload, kind) for i, (payload, kind) in enumerate(encoded_bframes)]
     data = audio.read_bytes()
     offset = index = 0
     while offset < len(data):
@@ -362,18 +412,100 @@ def test_recovered_ts_decodes_in_full(simulation, tmp_path):
         offset += length
         index += 1
     samples.sort(key=lambda x: x[0])
-    wires = [media(n + 1, 50_000_000 + t, p, k) for n, (t, p, k) in enumerate(samples)]
+    wires = [
+        parent_packet(0xC748, media_body(payload, kind, n + 1, 50_000_000 + timestamp))
+        for n, (timestamp, payload, kind) in enumerate(samples)
+    ]
     sink, out, _, _ = simulation(
         [
             (controls() + b"".join(wires[:20]), "eof"),
             (controls() + b"".join(wires[17:]), "deadline"),
-        ]
+        ],
+        sink_class=MediaSink,
     )
     assert sink.stats["failover_successes"] == 1
     assert sink.stats["duplicate_frames_excluded"] == 3
     ts = tmp_path / "recovered.ts"
-    ts.write_bytes(b"".join(out))
-    run(["-xerror", "-i", str(ts), "-map", "0:v:0", "-map", "0:a:0", "-f", "null", "-"])
+    ts_bytes = b"".join(out)
+    ts.write_bytes(ts_bytes)
+    pcr_values = []
+    for offset in range(0, len(ts_bytes), 188):
+        packet = ts_bytes[offset : offset + 188]
+        pid = ((packet[1] & 0x1F) << 8) | packet[2]
+        if pid == 0x100 and packet[3] & 0x20 and packet[5] & 0x10:
+            pcr_values.append(
+                (packet[6] << 25)
+                | (packet[7] << 17)
+                | (packet[8] << 9)
+                | (packet[9] << 1)
+                | (packet[10] >> 7)
+            )
+    assert pcr_values and all(a < b for a, b in zip(pcr_values, pcr_values[1:], strict=False))
+    decoded = subprocess.run(
+        [
+            ffmpeg,
+            "-v",
+            "warning",
+            "-xerror",
+            "-nostdin",
+            "-i",
+            str(ts),
+            "-map",
+            "0:v:0",
+            "-map",
+            "0:a:0",
+            "-f",
+            "null",
+            "-",
+        ],
+        capture_output=True,
+        timeout=20,
+    )
+    assert decoded.returncode == 0, decoded.stderr.decode("utf-8", "replace")
+    assert b"non-monoton" not in decoded.stderr.lower()
+    ffprobe = os.environ.get("SOOP_TEST_FFPROBE") or shutil.which("ffprobe")
+    if ffprobe:
+        packets = subprocess.run(
+            [
+                ffprobe,
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "packet=pts,dts",
+                "-of",
+                "json",
+                str(ts),
+            ],
+            capture_output=True,
+            timeout=20,
+        )
+        assert packets.returncode == 0
+        values = __import__("json").loads(packets.stdout)["packets"]
+        dts = [int(p["dts"]) for p in values]
+        pts = [int(p["pts"]) for p in values]
+        assert all(a < b for a, b in zip(dts, dts[1:], strict=False))
+        assert all(p >= d for p, d in zip(pts, dts, strict=True))
+        assert any(a > b for a, b in zip(pts, pts[1:], strict=False))
+        timeline = subprocess.run(
+            [
+                ffprobe,
+                "-v",
+                "error",
+                "-show_entries",
+                "stream=codec_type,start_time",
+                "-of",
+                "json",
+                str(ts),
+            ],
+            capture_output=True,
+            timeout=20,
+        )
+        assert timeline.returncode == 0
+        streams = __import__("json").loads(timeline.stdout)["streams"]
+        starts = {stream["codec_type"]: float(stream["start_time"]) for stream in streams}
+        assert abs(starts["video"] - starts["audio"]) < 1 / 30
 
 
 def test_retry_and_rediscovery_counts_are_globally_bounded(simulation):

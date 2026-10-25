@@ -1,7 +1,11 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright (c) 2026 source.soop contributors
 import json
+import os
+import re
+import shutil
 import struct
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -62,3 +66,50 @@ def media_body(payload, kind="I", frame=1, timestamp=50_000_000):
     struct.pack_into("<Q", b, 41, timestamp)
     b[69:] = payload
     return bytes(b)
+
+
+@pytest.fixture(scope="session")
+def encoded_bframes(tmp_path_factory):
+    """Synthetic Annex-B access units with real SPS/PPS and two B pictures."""
+    ffmpeg = os.environ.get("SOOP_TEST_FFMPEG") or shutil.which("ffmpeg")
+    if not ffmpeg:
+        pytest.skip("FFmpeg required to synthesize standards-conformant B-frame fixture")
+    path = tmp_path_factory.mktemp("h264-bframes") / "video.h264"
+    result = subprocess.run(
+        [
+            ffmpeg,
+            "-v",
+            "error",
+            "-nostdin",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=160x96:rate=30",
+            "-frames:v",
+            "30",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-x264-params",
+            "bframes=2:keyint=15:min-keyint=15:scenecut=0:aud=1:repeat-headers=1:force-cfr=1",
+            "-f",
+            "h264",
+            str(path),
+        ],
+        capture_output=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr.decode("utf-8", "replace")
+    data = path.read_bytes()
+    starts = list(re.finditer(b"\x00\x00(?:\x00)?\x01\x09", data))
+    assert len(starts) == 30
+    from soop_grid.mpegts import nals
+
+    units = [
+        data[m.start() : starts[i + 1].start() if i + 1 < len(starts) else len(data)]
+        for i, m in enumerate(starts)
+    ]
+    result = [(unit, "I" if any(n[0] & 31 == 5 for n in nals(unit)) else "P") for unit in units]
+    assert any(n[0] & 31 == 1 for unit, _ in result[1:] for n in nals(unit))
+    return result

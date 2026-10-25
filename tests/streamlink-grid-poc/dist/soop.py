@@ -310,7 +310,7 @@ def _sg_crypto_service6(guid, timestamp, counter):
     return _sg_crypto_wire_hash(_sg_crypto_pad16(second)) + _sg_crypto_ctr(_sg_crypto_SERVICE_KEY, _sg_crypto_SERVICE_IV, second)
 
 
-# Module: mpegts; source SHA-256: 0d48185e80bb966e79293eae434a64f68fe6cc52c4eb340d9f753bdd5508d95b
+# Module: mpegts; source SHA-256: 8fffe155f36cebc117733a36914e798b71e117cdcdf8e1212652a8d6908f4e22
 import struct as _sg_mpegts_struct
 _sg_mpegts_GridError = _sg_protocol_GridError
 
@@ -330,9 +330,9 @@ def _sg_mpegts_crc_mpeg(data):
             crc = (crc << 1 ^ (79764919 if crc & 2147483648 else 0)) & 4294967295
     return crc
 
-def _sg_mpegts_pts_bytes(value):
+def _sg_mpegts_pts_bytes(value, prefix=2):
     v = value & (1 << 33) - 1
-    return bytes((33 | v >> 29 & 14, v >> 22 & 255, v >> 14 & 254 | 1, v >> 7 & 255, v << 1 & 255 | 1))
+    return bytes(((prefix & 15) << 4 | (v >> 30 & 7) << 1 | 1, v >> 22 & 255, v >> 14 & 254 | 1, v >> 7 & 255, v << 1 & 255 | 1))
 
 class _sg_mpegts_TSMux:
 
@@ -345,6 +345,7 @@ class _sg_mpegts_TSMux:
         self.preroll_video = 0
         self.first_pts = None
         self.last_pts = None
+        self.last_dts = None
 
     def packetize(self, pid, data, start=True, pcr=None):
         data = memoryview(data)
@@ -383,11 +384,64 @@ class _sg_mpegts_TSMux:
         pmt = bytes.fromhex('02b0170001c10000e100f0001be100f0000fe101f000')
         return self.section(0, pat) + self.section(4096, pmt)
 
+    def _pes(self, video, pts, payload, dts=None, pcr=None):
+        out = b''
+        if not self.started:
+            return b''
+        if not 0 <= pts:
+            raise _sg_mpegts_GridError('media_pts_bounds')
+        if dts is not None and (not 0 <= dts):
+            raise _sg_mpegts_GridError('media_dts_bounds')
+        if video and dts is not None and (self.last_dts is not None) and (dts <= self.last_dts):
+            raise _sg_mpegts_GridError('media_dts_not_monotonic')
+        out = b''
+        if video:
+            self.last_dts = dts
+            if self.video_frames and self.video_frames % 60 == 0:
+                out += self.tables()
+            self.video_frames += 1
+            if self.first_pts is None:
+                self.first_pts = pts
+            self.last_pts = pts
+        else:
+            self.audio_chunks += 1
+        if video and dts is not None:
+            flags, header_len = (192, 10)
+            timestamps = _sg_mpegts_pts_bytes(pts, 3) + _sg_mpegts_pts_bytes(dts, 1)
+        else:
+            flags, header_len = (128, 5)
+            timestamps = _sg_mpegts_pts_bytes(pts, 2)
+        length = 0 if video else len(payload) + 3 + header_len
+        if length > 65535:
+            raise _sg_mpegts_GridError('aac_pes_limit')
+        pes = b'\x00\x00\x01' + bytes((224 if video else 192,)) + _sg_mpegts_struct.pack('>H', length) + bytes((128, flags, header_len)) + timestamps + payload
+        return out + self.packetize(256 if video else 257, pes, pcr=(dts if dts is not None else pcr) if video else None)
+
+    def add_video(self, dts, pts, payload, *, idr=False):
+        if not self.started:
+            if not idr or not _sg_mpegts_has_nal(payload, 7) or (not _sg_mpegts_has_nal(payload, 8)) or (not _sg_mpegts_has_nal(payload, 5)):
+                self.preroll_video += 1
+                return b''
+            self.started = True
+            out = self.tables()
+        else:
+            out = b''
+        return out + self._pes(True, pts, payload, dts)
+
+    def add_audio(self, pts, payload):
+        if not self.started or pts is None:
+            return b''
+        return self._pes(False, pts, payload)
+
     def add(self, kind, timestamp, payload):
+        """Legacy PTS-only serializer retained for Go golden-vector tests.
+
+        The receiver never calls this method: production media must use
+        ``add_video`` with independently derived PTS/DTS.
+        """
         video = kind in ('I', 'P', 'B')
         if not video and kind != 'A':
             return b''
-        out = b''
         if not self.started:
             if not video:
                 return b''
@@ -397,23 +451,12 @@ class _sg_mpegts_TSMux:
             self.started = True
             self.base = timestamp
             out = self.tables()
-        if timestamp > (1 << 63) - 1 - 10000000 or self.base > (1 << 63) - 1 or timestamp + 10000000 < self.base:
+        else:
+            out = b''
+        if timestamp > (1 << 63) - 1 - 10000000 or timestamp + 10000000 < self.base:
             raise _sg_mpegts_GridError('media_timestamp_bounds')
         pts = (timestamp - self.base + 10000000) * 9 // 1000
-        if video:
-            if self.video_frames and self.video_frames % 60 == 0:
-                out += self.tables()
-            self.video_frames += 1
-            if self.first_pts is None:
-                self.first_pts = pts
-            self.last_pts = pts
-        else:
-            self.audio_chunks += 1
-        length = 0 if video else len(payload) + 8
-        if length > 65535:
-            raise _sg_mpegts_GridError('aac_pes_limit')
-        pes = b'\x00\x00\x01' + bytes((224 if video else 192,)) + _sg_mpegts_struct.pack('>H', length) + b'\x80\x80\x05' + _sg_mpegts_pts_bytes(pts) + payload
-        return out + self.packetize(256 if video else 257, pes, pcr=pts if video else None)
+        return out + self._pes(video, pts, payload, pcr=pts if video else None)
 
 
 # Module: recovery; source SHA-256: 57589dc1d03c8757c9d9401a4b21daccd2976f45597790f348f93c93bfc05c6e
@@ -485,7 +528,7 @@ class _sg_recovery_Continuity:
             self.report('parent_failover_succeeded')
 
 
-# Module: bootstrap; source SHA-256: d6649dc47cfc5a019c970fcad564590705c9e309fe1c4b783c32d29ca3f3b2ce
+# Module: bootstrap; source SHA-256: 62754c01d23da27287cfca696a2a06f1d1b878d6c541d5f7672bf9e9baa2579a
 import re as _sg_bootstrap_re
 from dataclasses import dataclass as _sg_bootstrap_dataclass, field as _sg_bootstrap_field
 _sg_bootstrap_HTTP = _sg_auth_HTTP
@@ -503,7 +546,8 @@ class _sg_bootstrap_Config:
     account_password: str = _sg_bootstrap_field(default='', repr=False)
     stream_password: str = _sg_bootstrap_field(default='', repr=False)
     require_adult: bool = False
-    duration: float = 35
+    duration: float | None = None
+    max_bytes: int | None = None
     capture_dir: str | None = _sg_bootstrap_field(default=None, repr=False)
 
     def validate(self):
@@ -514,8 +558,10 @@ class _sg_bootstrap_Config:
             if not 0 < int(self.bno) <= 4294967295:
                 raise _sg_bootstrap_GridError('broadcast_number_bounds')
             self.bno = str(int(self.bno))
-        if not 1 <= self.duration <= 60:
+        if self.duration is not None and (type(self.duration) not in (int, float) or self.duration <= 0):
             raise _sg_bootstrap_GridError('capture_duration_bounds')
+        if self.max_bytes is not None and (type(self.max_bytes) is not int or self.max_bytes <= 0):
+            raise _sg_bootstrap_GridError('capture_byte_limit_bounds')
         if bool(self.account) != bool(self.account_password) or ((self.require_adult or self.stream_password) and (not self.account)):
             raise _sg_bootstrap_GridError('account_credentials_required')
         if self.stream_password and (len(self.stream_password) > 12 or any((ord(c) < 32 or ord(c) > 126 for c in self.stream_password))):
@@ -609,13 +655,374 @@ def _sg_bootstrap_bootstrap(config, report, http_factory=_sg_bootstrap_HTTP):
         http.close()
 
 
-# Module: media; source SHA-256: 64cecc009f4a4c6265d76cb564129b4120e0ef9b900f33a638ae2d5d32cfdae1
+# Module: h264clock; source SHA-256: 82196e8df407d1f488edc229b942aec30f023651787ee0542fc3f3cc435cae58
+from dataclasses import dataclass as _sg_h264clock_dataclass
+from fractions import Fraction as _sg_h264clock_Fraction
+_sg_h264clock_nals = _sg_mpegts_nals
+_sg_h264clock_GridError = _sg_protocol_GridError
+
+class _sg_h264clock_Reader:
+
+    def __init__(self, data):
+        self.data, self.pos = (data, 0)
+
+    def bit(self):
+        if self.pos >= len(self.data) * 8:
+            raise _sg_h264clock_GridError('h264_header_truncated')
+        b = self.data[self.pos >> 3] >> 7 - (self.pos & 7) & 1
+        self.pos += 1
+        return b
+
+    def bits(self, n):
+        if not 0 <= n <= 32:
+            raise _sg_h264clock_GridError('h264_field_bounds')
+        value = 0
+        for _ in range(n):
+            value = value << 1 | self.bit()
+        return value
+
+    def ue(self):
+        zeroes = 0
+        while self.bit() == 0:
+            zeroes += 1
+            if zeroes > 31:
+                raise _sg_h264clock_GridError('h264_golomb_limit')
+        return (1 << zeroes) - 1 + self.bits(zeroes)
+
+    def se(self):
+        value = self.ue()
+        return (value + 1) // 2 if value & 1 else -(value // 2)
+
+def _sg_h264clock_rbsp(nal):
+    if len(nal) < 2 or nal[0] & 128:
+        raise _sg_h264clock_GridError('h264_nal_header_invalid')
+    out, zeros = (bytearray(), 0)
+    for b in nal[1:]:
+        if zeros >= 2 and b == 3:
+            zeros = 0
+            continue
+        out.append(b)
+        zeros = zeros + 1 if b == 0 else 0
+    return bytes(out)
+
+def _sg_h264clock_skip_scaling_list(r, size):
+    last = nxt = 8
+    for _ in range(size):
+        if nxt:
+            nxt = (last + r.se() + 256) % 256
+        if nxt:
+            last = nxt
+
+def _sg_h264clock_skip_hrd(r):
+    count = r.ue()
+    if count > 31:
+        raise _sg_h264clock_GridError('h264_hrd_limit')
+    r.bits(4)
+    r.bits(4)
+    for _ in range(count + 1):
+        r.ue()
+        r.ue()
+        r.bit()
+    r.bits(5)
+    r.bits(5)
+    r.bits(5)
+    r.bits(5)
+_sg_h264clock__MAX_DPB_MBS = {10: 396, 11: 900, 12: 2376, 13: 2376, 20: 2376, 21: 4752, 22: 8100, 30: 8100, 31: 18000, 32: 20480, 40: 32768, 41: 32768, 42: 34816, 50: 110400, 51: 184320, 52: 184320, 60: 696320, 61: 696320, 62: 696320}
+
+def _sg_h264clock_inferred_reorder(profile, level, constraints, width_mbs, height_map):
+    """Infer max_num_reorder_frames per H.264 8.2.5.2 when absent in VUI."""
+    if level not in _sg_h264clock__MAX_DPB_MBS or not width_mbs or (not height_map):
+        raise _sg_h264clock_GridError('h264_reorder_bound_unconfirmed')
+    if profile in (44, 86, 100, 110, 122, 244) and constraints & 16:
+        return 0
+    picture_mbs = width_mbs * height_map
+    max_dpb_frames = min(16, _sg_h264clock__MAX_DPB_MBS[level] // picture_mbs)
+    if max_dpb_frames < 1:
+        raise _sg_h264clock_GridError('h264_level_dpb_invalid')
+    return max_dpb_frames
+
+def _sg_h264clock_parse_sps(nal):
+    r = _sg_h264clock_Reader(_sg_h264clock_rbsp(nal))
+    profile = r.bits(8)
+    constraints = r.bits(8)
+    level = r.bits(8)
+    sps_id = r.ue()
+    if sps_id > 31:
+        raise _sg_h264clock_GridError('h264_sps_id_limit')
+    chroma, separate = (1, 0)
+    if profile in (100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135):
+        chroma = r.ue()
+        if chroma > 3:
+            raise _sg_h264clock_GridError('h264_chroma_unsupported')
+        if chroma == 3:
+            separate = r.bit()
+            if separate:
+                raise _sg_h264clock_GridError('h264_separate_colour_plane_unsupported')
+        r.ue()
+        r.ue()
+        r.bit()
+        if r.bit():
+            for i in range(12 if chroma == 3 else 8):
+                if r.bit():
+                    _sg_h264clock_skip_scaling_list(r, 16 if i < 6 else 64)
+    log2_frame = r.ue() + 4
+    poc_type = r.ue()
+    if not 4 <= log2_frame <= 16 or poc_type != 0:
+        raise _sg_h264clock_GridError('h264_poc_mode_unsupported')
+    log2_poc = r.ue() + 4
+    if not 4 <= log2_poc <= 16:
+        raise _sg_h264clock_GridError('h264_poc_width_invalid')
+    r.ue()
+    r.bit()
+    width_mbs, height_map = (r.ue() + 1, r.ue() + 1)
+    frame_only = r.bit()
+    if not frame_only:
+        raise _sg_h264clock_GridError('h264_interlaced_unsupported')
+    r.bit()
+    crop = (0, 0, 0, 0)
+    if r.bit():
+        crop = tuple((r.ue() for _ in range(4)))
+    vui = None
+    if r.bit():
+        vui = _sg_h264clock_parse_vui(r)
+    if not vui or not vui['fixed']:
+        raise _sg_h264clock_GridError('h264_timing_unconfirmed')
+    max_reorder = vui['max_reorder']
+    if not vui['reorder']:
+        max_reorder = _sg_h264clock_inferred_reorder(profile, level, constraints, width_mbs, height_map)
+    if max_reorder > 16:
+        raise _sg_h264clock_GridError('h264_reorder_limit')
+    subw, subh = (1, 1) if separate or chroma in (0, 3) else (2, 2) if chroma == 1 else (2, 1)
+    left, right, top, bottom = crop
+    width = width_mbs * 16 - subw * (left + right)
+    height = height_map * 16 - subh * (top + bottom)
+    if not 0 < width <= 16384 or not 0 < height <= 16384:
+        raise _sg_h264clock_GridError('h264_dimensions_invalid')
+    return {'id': sps_id, 'profile': profile, 'constraints': constraints, 'level': level, 'log2_frame_num': log2_frame, 'log2_poc_lsb': log2_poc, 'width': width, 'height': height, 'frame_duration_100ns': _sg_h264clock_Fraction(20000000 * vui['units'], vui['scale']), 'max_reorder': max_reorder, 'fps_numerator': vui['scale'], 'fps_denominator': 2 * vui['units']}
+
+def _sg_h264clock_parse_vui(r):
+    if r.bit():
+        aspect = r.bits(8)
+        if aspect == 255:
+            r.bits(16)
+            r.bits(16)
+    if r.bit():
+        r.bit()
+    if r.bit():
+        r.bits(3)
+        r.bit()
+        if r.bit():
+            r.bits(8)
+            r.bits(8)
+            r.bits(8)
+    if r.bit():
+        r.ue()
+        r.ue()
+    timing = None
+    if r.bit():
+        units, scale, fixed = (r.bits(32), r.bits(32), r.bit())
+        if not units or not scale:
+            raise _sg_h264clock_GridError('h264_vui_timing_invalid')
+        timing = {'units': units, 'scale': scale, 'fixed': bool(fixed)}
+    nal_hrd = r.bit()
+    if nal_hrd:
+        _sg_h264clock_skip_hrd(r)
+    vcl_hrd = r.bit()
+    if vcl_hrd:
+        _sg_h264clock_skip_hrd(r)
+    if nal_hrd or vcl_hrd:
+        r.bit()
+    r.bit()
+    restriction = False
+    max_reorder = 0
+    if r.bit():
+        restriction = True
+        r.bit()
+        for _ in range(4):
+            r.ue()
+        max_reorder = r.ue()
+        max_buffer = r.ue()
+        if max_reorder > max_buffer:
+            raise _sg_h264clock_GridError('h264_reorder_bound_invalid')
+    if not timing:
+        return None
+    return {**timing, 'reorder': restriction, 'max_reorder': max_reorder}
+
+def _sg_h264clock_parse_pps(nal):
+    r = _sg_h264clock_Reader(_sg_h264clock_rbsp(nal))
+    pps_id, sps_id = (r.ue(), r.ue())
+    if pps_id > 255 or sps_id > 31:
+        raise _sg_h264clock_GridError('h264_pps_id_limit')
+    r.bit()
+    bottom = r.bit()
+    if r.ue() != 0:
+        raise _sg_h264clock_GridError('h264_slice_groups_unsupported')
+    r.ue()
+    r.ue()
+    r.bit()
+    r.bits(2)
+    r.se()
+    r.se()
+    r.se()
+    r.bit()
+    r.bit()
+    redundant = r.bit()
+    return {'id': pps_id, 'sps_id': sps_id, 'bottom_poc': bool(bottom), 'redundant': bool(redundant)}
+
+@_sg_h264clock_dataclass(frozen=True)
+class _sg_h264clock_Picture:
+    sps: dict
+    pps: dict
+    frame_num: int
+    poc: int
+    slice_kind: str
+    idr: bool
+    nal_ref_idc: int
+
+def _sg_h264clock_parse_slice(nal, sps, pps):
+    r = _sg_h264clock_Reader(_sg_h264clock_rbsp(nal))
+    r.ue()
+    slice_type = r.ue()
+    if slice_type > 9:
+        raise _sg_h264clock_GridError('h264_slice_type_invalid')
+    slice_type %= 5
+    r.ue()
+    if sps['profile'] in (100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135):
+        pass
+    frame_num = r.bits(sps['log2_frame_num'])
+    nal_type = nal[0] & 31
+    idr = nal_type == 5
+    if idr:
+        r.ue()
+    poc_lsb = r.bits(sps['log2_poc_lsb'])
+    delta = r.se() if pps['bottom_poc'] else 0
+    kind = ('P', 'B', 'I', 'SP', 'SI')[slice_type]
+    if kind in ('SP', 'SI'):
+        raise _sg_h264clock_GridError('h264_switching_slice_unsupported')
+    return (frame_num, poc_lsb, delta, kind, idr, nal[0] >> 5 & 3)
+
+class _sg_h264clock_H264Clock:
+
+    def __init__(self):
+        self.sps = {}
+        self.pps = {}
+        self.prev_msb = 0
+        self.prev_lsb = 0
+        self.epoch_poc = None
+        self.epoch_dts = None
+        self.epoch_pts = None
+        self.origin_dts = None
+        self.reorder_lead = None
+        self.last_dts = None
+        self.last_pts = None
+        self.last_poc = None
+        self.max_pts = None
+        self.duration = None
+        self.reorder = None
+        self.sps_signature = None
+
+    def inspect(self, payload, grid_timestamp):
+        units = _sg_h264clock_nals(payload)
+        vcl = []
+        for nal in units:
+            kind = nal[0] & 31
+            if kind == 7:
+                info = _sg_h264clock_parse_sps(nal)
+                signature = (info['id'], info['profile'], info['level'], info['width'], info['height'], info['frame_duration_100ns'], info['max_reorder'])
+                if self.sps_signature is not None and signature != self.sps_signature:
+                    raise _sg_h264clock_GridError('h264_codec_configuration_changed')
+                self.sps_signature = signature
+                self.sps[info['id']] = info
+            elif kind == 8:
+                pps = _sg_h264clock_parse_pps(nal)
+                previous = self.pps.get(pps['id'])
+                if previous is not None and previous != pps:
+                    raise _sg_h264clock_GridError('h264_codec_configuration_changed')
+                self.pps[pps['id']] = pps
+            elif kind in (2, 3, 4, 19, 20, 21):
+                raise _sg_h264clock_GridError('h264_vcl_partition_or_extension_unsupported')
+            elif kind in (1, 5):
+                vcl.append(nal)
+        if not vcl:
+            return None
+        if len(vcl) > 8:
+            raise _sg_h264clock_GridError('h264_slice_count_limit')
+        parsed = []
+        for nal in vcl:
+            r = _sg_h264clock_Reader(_sg_h264clock_rbsp(nal))
+            r.ue()
+            r.ue()
+            pps_id = r.ue()
+            pps = self.pps.get(pps_id)
+            sps = self.sps.get(pps['sps_id']) if pps else None
+            if not sps:
+                raise _sg_h264clock_GridError('h264_parameter_set_missing')
+            parsed.append((_sg_h264clock_parse_slice(nal, sps, pps), sps, pps))
+        first, sps, pps = parsed[0]
+        if any((item[0] != first or item[1] != sps or item[2] != pps for item in parsed[1:])):
+            raise _sg_h264clock_GridError('h264_multiple_pictures_per_grid_chunk')
+        frame_num, poc_lsb, delta_bottom, slice_kind, idr, ref_idc = first
+        max_lsb = 1 << sps['log2_poc_lsb']
+        if idr:
+            self.prev_msb = self.prev_lsb = 0
+        if poc_lsb < self.prev_lsb and self.prev_lsb - poc_lsb >= max_lsb // 2:
+            msb = self.prev_msb + max_lsb
+        elif poc_lsb > self.prev_lsb and poc_lsb - self.prev_lsb > max_lsb // 2:
+            msb = self.prev_msb - max_lsb
+        else:
+            msb = self.prev_msb
+        poc = msb + poc_lsb + min(0, delta_bottom)
+        if idr:
+            if self.epoch_poc is not None and self.last_pts is not None:
+                self.epoch_pts = self.max_pts + self._rescale(sps['frame_duration_100ns'])
+            else:
+                self.origin_dts = grid_timestamp
+                self.reorder_lead = self._rescale(sps['max_reorder'] * sps['frame_duration_100ns'])
+                self.epoch_pts = self.reorder_lead + 90000
+            self.epoch_poc, self.epoch_dts = (poc, grid_timestamp)
+        if self.epoch_poc is None:
+            return None
+        duration = sps['frame_duration_100ns']
+        if self.duration is None:
+            self.duration, self.reorder = (duration, sps['max_reorder'])
+        elif self.duration != duration or self.reorder != sps['max_reorder']:
+            raise _sg_h264clock_GridError('h264_timing_changed')
+        if self.last_dts is not None and grid_timestamp <= self.last_dts:
+            raise _sg_h264clock_GridError('grid_video_dts_not_increasing')
+        dts = self._rescale(grid_timestamp - self.origin_dts) + 90000
+        poc_offset = self._rescale(_sg_h264clock_Fraction(poc - self.epoch_poc, 2) * sps['frame_duration_100ns'])
+        pts = self.epoch_pts + poc_offset
+        reorder_bound = self._rescale(self.reorder * self.duration)
+        if pts < dts:
+            raise _sg_h264clock_GridError('h264_pts_before_dts')
+        if self.last_pts is not None and pts < self.last_pts - self.reorder_lead:
+            raise _sg_h264clock_GridError('h264_poc_regression_out_of_bound')
+        if self.max_pts is not None and pts < self.max_pts - reorder_bound:
+            raise _sg_h264clock_GridError('h264_poc_regression_out_of_bound')
+        if ref_idc:
+            self.prev_msb, self.prev_lsb = (msb, poc_lsb)
+        self.last_dts, self.last_dts_out, self.last_pts, self.last_poc = (grid_timestamp, dts, pts, poc)
+        self.max_pts = pts if self.max_pts is None else max(self.max_pts, pts)
+        return {'dts': dts, 'pts': pts, 'poc': poc, 'slice_type': slice_kind, 'idr': idr, 'sps': sps, 'units': units}
+
+    @staticmethod
+    def _rescale(timestamp_100ns):
+        return int(_sg_h264clock_Fraction(timestamp_100ns * 90000, 10000000))
+
+    def audio_pts(self, timestamp_100ns):
+        if self.origin_dts is None:
+            return None
+        return self._rescale(timestamp_100ns - self.origin_dts) + self.reorder_lead + 90000
+
+
+# Module: media; source SHA-256: e9755f8e9e0b02780c11b8955d950500d3fa1b4b0860aecdcc0a09cdc0acf664
 import hashlib as _sg_media_hashlib
 import json as _sg_media_json
 import os as _sg_media_os
 import struct as _sg_media_struct
 from dataclasses import dataclass as _sg_media_dataclass, field as _sg_media_field
 from pathlib import Path as _sg_media_Path
+_sg_media_H264Clock = _sg_h264clock_H264Clock
 _sg_media_TSMux = _sg_mpegts_TSMux
 _sg_media_nals = _sg_mpegts_nals
 _sg_media_GridError = _sg_protocol_GridError
@@ -772,6 +1179,7 @@ class _sg_media_MediaSink:
     def __init__(self, emit, capture_dir=None):
         self.emit = emit
         self.mux = _sg_media_TSMux()
+        self.video_clock = _sg_media_H264Clock()
         self.files = {}
         self.path = _sg_media_Path(capture_dir) if capture_dir else None
         self.owns_directory = False
@@ -810,6 +1218,7 @@ class _sg_media_MediaSink:
         if chunk.kind in ('I', 'P', 'B'):
             self.write('video.h264', chunk.payload)
             self.stats['video_frames'] += 1
+            timing = self.video_clock.inspect(chunk.payload, chunk.timestamp)
             if 'video' not in self.stats:
                 info = _sg_media_sps_info(chunk.payload)
                 if info:
@@ -819,11 +1228,20 @@ class _sg_media_MediaSink:
             self.stats['audio_frames'] += 1
             if 'audio' not in self.stats:
                 self.stats['audio'] = _sg_media_adts_info(chunk.payload)
-        ts = self.mux.add(chunk.kind, chunk.timestamp, chunk.payload)
+        ts = b''
+        if chunk.kind in ('I', 'P', 'B'):
+            if timing is not None:
+                ts = self.mux.add_video(timing['dts'], timing['pts'], chunk.payload, idr=timing['idr'])
+                self.stats['last_video_dts_90k'] = timing['dts']
+                self.stats['last_video_pts_90k'] = timing['pts']
+                self.stats['last_video_slice_type'] = timing['slice_type']
+                self.stats['last_video_poc'] = timing['poc']
+        else:
+            ts = self.mux.add_audio(self.video_clock.audio_pts(chunk.timestamp), chunk.payload)
         if ts:
             self.write('recording.ts', ts)
             self.emit(ts)
-        self.write('frames.jsonl', (_sg_media_json.dumps({'frame': chunk.frame, 'type': chunk.kind, 'timestamp_raw': chunk.timestamp, 'payload_bytes': len(chunk.payload)}) + '\n').encode())
+        self.write('frames.jsonl', (_sg_media_json.dumps({'frame': chunk.frame, 'type': chunk.kind, 'timestamp_raw': chunk.timestamp, 'payload_bytes': len(chunk.payload), **({'pts_90k': timing['pts'], 'dts_90k': timing['dts'], 'poc': timing['poc'], 'slice_type': timing['slice_type']} if chunk.kind in ('I', 'P', 'B') and timing is not None else {})}) + '\n').encode())
         return chunk
 
     def close(self):
@@ -855,7 +1273,7 @@ class _sg_media_MediaSink:
             raise _sg_media_GridError('capture_close_failed')
 
 
-# Module: parent; source SHA-256: d8fb5e7fb4e8258131e0a085b2ccb70900d1ff3dcbc32e824c905585a668b7c8
+# Module: parent; source SHA-256: 130b8f0e9d42980f12ca7efb30ad0f3f56f255bf90f97ce835c3a92d420830ad
 import json as _sg_parent_json
 import struct as _sg_parent_struct
 import time as _sg_parent_time
@@ -904,30 +1322,36 @@ def _sg_parent_parse_parents(body):
         raise _sg_parent_GridError('parent_list_invalid') from None
 _sg_parent_TRANSIENT = {'tcp_connect_failed', 'peer_closed_or_truncated', 'network_read_failed', 'network_read_timeout', 'network_write_failed', 'parent_media_stalled'}
 
-def _sg_parent_receive_media(network, parents, bno, node_key, sink, report, duration=35, max_bytes=512 << 20, rediscover=None):
-    if not 1 <= duration <= 60 or not 0 < max_bytes <= 512 << 20:
+def _sg_parent_receive_media(network, parents, bno, node_key, sink, report, duration=None, max_bytes=None, rediscover=None):
+    if duration is not None and (type(duration) not in (int, float) or duration <= 0):
         raise _sg_parent_GridError('capture_limits_invalid')
-    deadline = _sg_parent_time.monotonic() + duration
+    if max_bytes is not None and (type(max_bytes) is not int or max_bytes <= 0):
+        raise _sg_parent_GridError('capture_limits_invalid')
+    deadline = _sg_parent_time.monotonic() + duration if duration is not None else None
     if hasattr(network, 'deadline'):
         network.deadline = deadline
     stats = sink.stats if sink is not None else {}
     continuity = _sg_parent_Continuity(stats, report)
     queue = list(parents)
-    attempts = packets = requests = 0
+    attempts = packets_without_media = requests_without_media = 0
+    rediscoveries_this_outage = 0
     quality = None
     last_error = 'no_usable_server_parent'
     while not network.stop.is_set():
-        if _sg_parent_time.monotonic() >= deadline:
+        if deadline is not None and _sg_parent_time.monotonic() >= deadline:
             if continuity.recovering:
                 continuity.reject('recovery_deadline_exhausted')
+            stats['stop_reason'] = 'duration_limit'
+            report('grid_duration_limit_reached')
             return
         if not queue:
-            if rediscover is None or stats['rediscoveries'] >= 1 or attempts >= 8:
+            if rediscover is None or rediscoveries_this_outage >= 1 or attempts >= 8:
                 report('parent_failover_exhausted')
                 if continuity.recovering:
                     continuity.reject('recovery_candidates_exhausted')
                 raise _sg_parent_GridError(last_error)
             stats['rediscoveries'] += 1
+            rediscoveries_this_outage += 1
             report('parent_rediscovery_started')
             queue, node_key = rediscover()
             queue = list(queue)
@@ -944,10 +1368,11 @@ def _sg_parent_receive_media(network, parents, bno, node_key, sink, report, dura
         if attempts:
             stats['failover_attempts'] += 1
             report('parent_failover_started')
-            if network.stop.wait(min(0.1, max(0, deadline - _sg_parent_time.monotonic()))):
+            backoff = 0.1 if deadline is None else min(0.1, max(0, deadline - _sg_parent_time.monotonic()))
+            if network.stop.wait(backoff):
                 raise _sg_parent_Cancelled('receiver_closed')
         attempts += 1
-        stats['parent_connection_attempts'] = attempts
+        stats['parent_connection_attempts'] = stats.get('parent_connection_attempts', 0) + 1
         sock = None
         try:
             sock = network.connect(parent.address)
@@ -967,23 +1392,26 @@ def _sg_parent_receive_media(network, parents, bno, node_key, sink, report, dura
                 network.send(connection, _sg_parent_parent_packet(cmd, body))
             send(52014, _sg_parent_struct.pack('<III', bno, node_key, parent.quality))
             while not network.stop.is_set():
-                remaining = deadline - _sg_parent_time.monotonic()
-                if remaining <= 0:
+                remaining = None if deadline is None else deadline - _sg_parent_time.monotonic()
+                if remaining is not None and remaining <= 0:
                     if continuity.recovering:
                         continuity.reject('recovery_deadline_exhausted')
+                    stats['stop_reason'] = 'duration_limit'
+                    report('grid_duration_limit_reached')
                     return
-                frame = _sg_parent_read_frame(sock, 'parent', min(3, remaining))
-                packets += 1
-                if packets > 8192:
+                frame = _sg_parent_read_frame(sock, 'parent', 3 if remaining is None else min(3, remaining))
+                stats['parent_packets'] = stats.get('parent_packets', 0) + 1
+                packets_without_media += 1
+                if packets_without_media > 8192:
                     raise _sg_parent_GridError('parent_packet_limit')
                 if frame.result < 0:
                     raise _sg_parent_GridError('parent_access_denied')
                 if frame.command in (51014, 7111):
                     send(52015, _sg_parent_struct.pack('<I', parent.quality))
                 elif frame.command == 51015:
-                    requests += 1
+                    requests_without_media += 1
                     connection_requests += 1
-                    if requests > 45:
+                    if requests_without_media > 45:
                         raise _sg_parent_GridError('cache_request_limit')
                     if not 0 <= cache_start < 1 << 64:
                         raise _sg_parent_GridError('cache_frame_bounds')
@@ -993,19 +1421,22 @@ def _sg_parent_receive_media(network, parents, bno, node_key, sink, report, dura
                         send(52011)
                         live_started = True
                 elif frame.command == 51016:
-                    if stats['wire_bytes'] + len(frame.wire) > max_bytes:
+                    if max_bytes is not None and stats['wire_bytes'] + len(frame.wire) > max_bytes:
+                        stats['stop_reason'] = 'byte_limit'
+                        report('grid_media_byte_limit_reached')
                         return
                     chunk = _sg_parent_parse_media(frame.body)
                     accepted = continuity.accept(chunk)
                     sink.add(frame, discard=not accepted) if not accepted else sink.add(frame)
                     if accepted:
                         continuity.committed()
+                        packets_without_media = 0
+                        requests_without_media = 0
+                        attempts = 0
+                        rediscoveries_this_outage = 0
                         if live_started and resume_live_pending:
                             report('grid_live_resumed')
                             resume_live_pending = False
-                        if attempts > 1 and stats['failover_successes'] == 0:
-                            stats['failover_successes'] += 1
-                            report('parent_failover_succeeded')
                         quality = parent.quality
                         cache_start = chunk.frame + 1
                     last_media = _sg_parent_time.monotonic()
@@ -1018,7 +1449,7 @@ def _sg_parent_receive_media(network, parents, bno, node_key, sink, report, dura
         except _sg_parent_GridError as exc:
             if network.stop.is_set():
                 raise _sg_parent_Cancelled('receiver_closed') from None
-            if str(exc) in ('network_read_timeout', 'capture_deadline_reached') and _sg_parent_time.monotonic() >= deadline:
+            if str(exc) in ('network_read_timeout', 'capture_deadline_reached') and deadline is not None and (_sg_parent_time.monotonic() >= deadline):
                 if continuity.recovering:
                     continuity.reject('recovery_deadline_exhausted')
                 return
@@ -1234,9 +1665,10 @@ def _sg_gateway_obtain_certificate(network, session, report):
         network.release(sock)
 
 
-# Module: stream; source SHA-256: c7faa8d58286df2979fb56efa417186f24f2749e45d0cf88e51ce42c714807e2
+# Module: stream; source SHA-256: 0d3c48ca9e7f077b88568c5894d015fb9fa8d732c4b04ff912304bc0454ee229
 import threading as _sg_stream_threading
 import time as _sg_stream_time
+import logging as _sg_stream_logging
 from streamlink.exceptions import StreamError as _sg_stream_StreamError
 from streamlink.stream.stream import Stream as _sg_stream_Stream, StreamIO as _sg_stream_StreamIO
 _sg_stream_HTTP = _sg_auth_HTTP
@@ -1248,6 +1680,8 @@ _sg_stream_receive_media = _sg_parent_receive_media
 _sg_stream_Cancelled = _sg_protocol_Cancelled
 _sg_stream_GridError = _sg_protocol_GridError
 _sg_stream_Network = _sg_protocol_Network
+_sg_stream__log = _sg_stream_logging.getLogger('streamlink.plugins.soopgrid')
+_sg_stream__INITIAL_TRANSPORT_FAILURES = {'tcp_connect_failed', 'peer_closed_or_truncated', 'network_read_failed', 'network_read_timeout', 'network_write_failed', 'parent_media_stalled', 'parent_retry_limit', 'parent_rediscovery_empty', 'no_usable_server_parent'}
 
 class _sg_stream_BoundedBuffer:
 
@@ -1325,7 +1759,7 @@ def _sg_stream_receive(config, network, emit, report, stats):
         credentials = _sg_stream_obtain_certificate(network, session, report)
         parents, node_key = _sg_stream_discover_parent(network, session.center, credentials, report)
         sink = _sg_stream_MediaSink(emit, config.capture_dir)
-        _sg_stream_receive_media(network, parents, session.bno, node_key, sink, report, config.duration, rediscover=lambda: _sg_stream_discover_parent(network, session.center, credentials, report))
+        _sg_stream_receive_media(network, parents, session.bno, node_key, sink, report, config.duration, config.max_bytes, rediscover=lambda: _sg_stream_discover_parent(network, session.center, credentials, report))
         if not sink.mux.video_frames:
             raise _sg_stream_GridError('no_playable_grid_video')
     finally:
@@ -1354,6 +1788,7 @@ class _sg_stream_SoopGridReader(_sg_stream_StreamIO):
         self.stages = []
         self._close_lock = _sg_stream_threading.Lock()
         self._closing = False
+        self.failure_code = None
 
     def open(self):
         if self.thread is not None or self.closed:
@@ -1362,8 +1797,10 @@ class _sg_stream_SoopGridReader(_sg_stream_StreamIO):
         self.thread.start()
         try:
             self.buffer.wait_ready()
-        except Exception:
+        except Exception as error:
             self.close()
+            if self.failure_code and error is not None:
+                error.grid_error_code = self.failure_code
             raise
         return self
 
@@ -1373,6 +1810,7 @@ class _sg_stream_SoopGridReader(_sg_stream_StreamIO):
             self.runner(self.stream.config, self.network, self.buffer.put, self.stages.append, self.stats)
         except Exception as exc:
             code = str(exc) if isinstance(exc, _sg_stream_GridError) else 'receiver_internal_failure'
+            self.failure_code = code
             if not self._closing:
                 error = _sg_stream_StreamError('SOOP Grid: ' + code)
         finally:
@@ -1424,34 +1862,131 @@ class _sg_stream_SoopGridStream(_sg_stream_Stream):
         self._opened = True
         return _sg_stream_SoopGridReader(self).open()
 
+class _sg_stream_OfficialHLSFallback:
+    """Lazy, one-shot delegation to Streamlink's maintained SOOP plugin."""
 
-# Module: plugin; source SHA-256: 8bc67fc9e2b4f0c818592f7c19a841a3a9b5e67c051ab6b049e1983cf593c499
+    def __init__(self, session, url, account, password, stream_password):
+        self.session, self.url, self.account = (session, url, account)
+        self.password, self.stream_password = (password, stream_password)
+        self.used = False
+
+    def __repr__(self):
+        return '<OfficialHLSFallback credentials=redacted>'
+
+    def clear(self):
+        self.password = self.stream_password = self.account = ''
+
+    def open(self):
+        if self.used:
+            raise _sg_stream_StreamError('Official SOOP HLS fallback is single-use')
+        self.used = True
+        try:
+            self.session.plugins.load_builtin()
+            plugin_class = self.session.plugins.get_loaded().get('soop')
+            if plugin_class is None:
+                raise _sg_stream_StreamError('Streamlink built-in SOOP plugin is unavailable')
+            plugin = plugin_class(self.session, self.url, options={'username': self.account, 'password': self.password, 'stream-password': self.stream_password})
+            streams = plugin.streams()
+            selected = streams.get('original') or next(iter(streams.values()), None)
+            if selected is None:
+                raise _sg_stream_StreamError('Official SOOP HLS plugin returned no playable stream')
+            return selected.open()
+        finally:
+            self.clear()
+
+class _sg_stream_SoopAutoStream(_sg_stream_Stream):
+    """Grid-first stream; only pre-output transport failures can select HLS."""
+    __shortname__ = 'auto'
+
+    def __init__(self, session, grid, fallback):
+        super().__init__(session)
+        self.grid = grid
+        self.fallback = fallback
+        self._opened = False
+
+    def open(self):
+        if self._opened:
+            raise _sg_stream_StreamError('SOOP auto streams are single-session; enumerate again to reopen')
+        self._opened = True
+        try:
+            reader = self.grid.open()
+            if self.fallback:
+                self.fallback.clear()
+            return reader
+        except _sg_stream_StreamError as exc:
+            if getattr(exc, 'grid_error_code', None) not in _sg_stream__INITIAL_TRANSPORT_FAILURES:
+                if self.fallback:
+                    self.fallback.clear()
+                raise
+            if self.fallback is None:
+                raise
+            _sg_stream__log.warning('Native Grid unavailable before media output; starting the official SOOP HLS stream')
+            try:
+                return self.fallback.open()
+            finally:
+                self.fallback.clear()
+
+
+# Module: plugin; source SHA-256: 4c21c40ecd22e47cef27e5ddd37dd2f4cbea5b43b1a85892df87ec5af7690513
 import os as _sg_plugin_os
 import re as _sg_plugin_re
+import logging as _sg_plugin_logging
 from streamlink.exceptions import PluginError as _sg_plugin_PluginError
 from streamlink.plugin import Plugin as _sg_plugin_Plugin, pluginargument as _sg_plugin_pluginargument, pluginmatcher as _sg_plugin_pluginmatcher
 _sg_plugin_Config = _sg_bootstrap_Config
 _sg_plugin_GridError = _sg_protocol_GridError
+_sg_plugin_OfficialHLSFallback = _sg_stream_OfficialHLSFallback
+_sg_plugin_SoopAutoStream = _sg_stream_SoopAutoStream
 _sg_plugin_SoopGridStream = _sg_stream_SoopGridStream
+_sg_plugin_log = _sg_plugin_logging.getLogger('streamlink.plugins.soopgrid')
 
-@_sg_plugin_pluginmatcher(_sg_plugin_re.compile('https?://play\\.(?:sooplive\\.com|sooplive\\.co\\.kr|afreecatv\\.com)/(?P<channel>[A-Za-z0-9_-]+)(?:/(?P<bno>\\d+))?/?(?:[?#].*)?$'))
-@_sg_plugin_pluginargument('grid-account', sensitive=True, help='Account ID; password comes only from SOOP_ACCOUNT_PASSWORD.')
-@_sg_plugin_pluginargument('grid-require-adult', action='store_true', help='Require the authenticated live API adult check.')
-@_sg_plugin_pluginargument('grid-duration', type=int, default=35, help='Bounded Grid session duration in seconds (1..60).')
-class _sg_plugin_SoopGrid(_sg_plugin_Plugin):
+def _sg_plugin_official_hls_streams(session, url, account, password, stream_password):
+    session.plugins.load_builtin()
+    plugin_class = session.plugins.get_loaded().get('soop')
+    if plugin_class is None:
+        return {}
+    plugin = plugin_class(session, url, options={'username': account, 'password': password, 'stream-password': stream_password})
+    return plugin.streams()
+
+@_sg_plugin_pluginmatcher(_sg_plugin_re.compile('https?://play\\.(?:sooplive\\.com|sooplive\\.co\\.kr|afreecatv\\.com)/(?P<channel>[A-Za-z0-9_-]+)(?:/(?P<bno>\\d+))?/?(?:[?#].*)?$'), priority=30)
+@_sg_plugin_pluginargument('transport', choices=('auto', 'grid', 'hls'), default='auto', argument_name='soop-grid-transport', help='Transport: Grid, official SOOP HLS, or Grid-first with initial HLS fallback.')
+@_sg_plugin_pluginargument('grid-account', sensitive=True, argument_name='soop-grid-account', help='SOOP account ID; password is read from SOOP_ACCOUNT_PASSWORD.')
+@_sg_plugin_pluginargument('grid-require-adult', action='store_true', argument_name='soop-grid-require-adult', help='Require the authenticated live API adult check.')
+@_sg_plugin_pluginargument('grid-duration', type=int, argument_name='soop-grid-duration', help='Optional Grid capture limit in seconds; omit to record until stopped.')
+@_sg_plugin_pluginargument('grid-max-bytes', type=int, argument_name='soop-grid-max-bytes', help='Optional maximum Grid wire bytes; omit for no lifetime byte cap.')
+@_sg_plugin_pluginargument('grid-stream-password', sensitive=True, argument_name='soop-grid-stream-password', help='Broadcast password. Prefer SOOP_STREAM_PASSWORD to avoid shell history.')
+class _sg_plugin_SoopGridPlugin(_sg_plugin_Plugin):
 
     def _get_streams(self):
-        config = _sg_plugin_Config(broadcaster=self.match['channel'], bno=self.match['bno'], account=self.get_option('grid-account') or _sg_plugin_os.environ.get('SOOP_ACCOUNT_ID', ''), account_password=_sg_plugin_os.environ.pop('SOOP_ACCOUNT_PASSWORD', ''), stream_password=_sg_plugin_os.environ.pop('SOOP_STREAM_PASSWORD', ''), require_adult=bool(self.get_option('grid-require-adult')), duration=int(self.get_option('grid-duration') if self.get_option('grid-duration') is not None else 35), capture_dir=_sg_plugin_os.environ.get('SOOP_GRID_CAPTURE_DIR') or None)
+        transport = self.get_option('transport') or 'auto'
+        account = self.get_option('grid-account') or _sg_plugin_os.environ.get('SOOP_ACCOUNT_ID', '')
+        account_password = _sg_plugin_os.environ.pop('SOOP_ACCOUNT_PASSWORD', '')
+        stream_password = self.get_option('grid-stream-password') or _sg_plugin_os.environ.pop('SOOP_STREAM_PASSWORD', '')
+        if transport == 'hls':
+            try:
+                hls_streams = _sg_plugin_official_hls_streams(self.session, self.url, account, account_password, stream_password)
+            except Exception:
+                raise _sg_plugin_PluginError('Official SOOP HLS stream enumeration failed') from None
+            if not hls_streams:
+                raise _sg_plugin_PluginError('The official SOOP plugin returned no HLS streams')
+            yield from hls_streams.items()
+            return
+        config = _sg_plugin_Config(broadcaster=self.match['channel'], bno=self.match['bno'], account=account, account_password=account_password, stream_password=stream_password, require_adult=bool(self.get_option('grid-require-adult')), duration=self.get_option('grid-duration'), max_bytes=self.get_option('grid-max-bytes'), capture_dir=_sg_plugin_os.environ.get('SOOP_GRID_CAPTURE_DIR') or None)
         try:
             config.validate()
         except _sg_plugin_GridError as exc:
             config.clear()
             raise _sg_plugin_PluginError(str(exc)) from None
-        yield ('original', _sg_plugin_SoopGridStream(self.session, config))
-_sg_plugin___plugin__ = _sg_plugin_SoopGrid
+        grid = _sg_plugin_SoopGridStream(self.session, config)
+        if transport == 'auto':
+            fallback = _sg_plugin_OfficialHLSFallback(self.session, self.url, account, account_password, stream_password)
+            yield ('original', _sg_plugin_SoopAutoStream(self.session, grid, fallback))
+        else:
+            yield ('original', grid)
+_sg_plugin___plugin__ = _sg_plugin_SoopGridPlugin
 
 
 __plugin__ = _sg_plugin___plugin__
 
 
-__grid_names__ = {'auth': {'json': '_sg_auth_json', 're': '_sg_auth_re', 'SimpleCookie': '_sg_auth_SimpleCookie', 'urlsplit': '_sg_auth_urlsplit', 'requests': '_sg_auth_requests', 'GridError': '_sg_auth_GridError', 'PLAY': '_sg_auth_PLAY', 'LIVE': '_sg_auth_LIVE', 'UA': '_sg_auth_UA', 'ALLOWED': '_sg_auth_ALLOWED', 'identifier': '_sg_auth_identifier', 'HTTP': '_sg_auth_HTTP'}, 'bootstrap': {'re': '_sg_bootstrap_re', 'dataclass': '_sg_bootstrap_dataclass', 'field': '_sg_bootstrap_field', 'HTTP': '_sg_bootstrap_HTTP', 'LIVE': '_sg_bootstrap_LIVE', 'PLAY': '_sg_bootstrap_PLAY', 'identifier': '_sg_bootstrap_identifier', 'GridError': '_sg_bootstrap_GridError', 'endpoint': '_sg_bootstrap_endpoint', 'Config': '_sg_bootstrap_Config', 'Session': '_sg_bootstrap_Session', 'affirmative_no': '_sg_bootstrap_affirmative_no', 'bootstrap': '_sg_bootstrap_bootstrap'}, 'center': {'hmac': '_sg_center_hmac', 'json': '_sg_center_json', 're': '_sg_center_re', 'struct': '_sg_center_struct', 'time': '_sg_center_time', 'dataclass': '_sg_center_dataclass', 'field': '_sg_center_field', 'AUTH_IV': '_sg_center_AUTH_IV', 'AUTH_KEY': '_sg_center_AUTH_KEY', 'PREFIX': '_sg_center_PREFIX', 'SALT': '_sg_center_SALT', 'ctr': '_sg_center_ctr', 'mixed_header': '_sg_center_mixed_header', 'pad16': '_sg_center_pad16', 'wire_hash': '_sg_center_wire_hash', 'GridError': '_sg_center_GridError', 'center_packet': '_sg_center_center_packet', 'read_frame': '_sg_center_read_frame', 'ADJUST': '_sg_center_ADJUST', 'JOINLOG': '_sg_center_JOINLOG', 'valid_seed': '_sg_center_valid_seed', 'Credentials': '_sg_center_Credentials', 'auth_body': '_sg_center_auth_body', 'join_body': '_sg_center_join_body', 'json_body': '_sg_center_json_body', 'discover_parent': '_sg_center_discover_parent'}, 'crypto': {'struct': '_sg_crypto_struct', 'AES': '_sg_crypto_AES', 'MASK': '_sg_crypto_MASK', 'leftWords': '_sg_crypto_leftWords', 'rightWords': '_sg_crypto_rightWords', 'leftShifts': '_sg_crypto_leftShifts', 'rightShifts': '_sg_crypto_rightShifts', '_boolean': '_sg_crypto__boolean', '_block': '_sg_crypto__block', 'wire_hash': '_sg_crypto_wire_hash', 'pad16': '_sg_crypto_pad16', 'ctr': '_sg_crypto_ctr', 'PREFIX': '_sg_crypto_PREFIX', 'SALT': '_sg_crypto_SALT', 'SERVICE_KEY': '_sg_crypto_SERVICE_KEY', 'SERVICE_IV': '_sg_crypto_SERVICE_IV', 'AUTH_KEY': '_sg_crypto_AUTH_KEY', 'AUTH_IV': '_sg_crypto_AUTH_IV', 'mixed_header': '_sg_crypto_mixed_header', 'service6': '_sg_crypto_service6'}, 'gateway': {'secrets': '_sg_gateway_secrets', 'struct': '_sg_gateway_struct', 'time': '_sg_gateway_time', 'service6': '_sg_gateway_service6', 'GridError': '_sg_gateway_GridError', 'gateway_packet': '_sg_gateway_gateway_packet', 'read_frame': '_sg_gateway_read_frame', 'login_packet': '_sg_gateway_login_packet', 'certificate_packet': '_sg_gateway_certificate_packet', 'validate_login': '_sg_gateway_validate_login', 'obtain_certificate': '_sg_gateway_obtain_certificate'}, 'media': {'hashlib': '_sg_media_hashlib', 'json': '_sg_media_json', 'os': '_sg_media_os', 'struct': '_sg_media_struct', 'dataclass': '_sg_media_dataclass', 'field': '_sg_media_field', 'Path': '_sg_media_Path', 'TSMux': '_sg_media_TSMux', 'nals': '_sg_media_nals', 'GridError': '_sg_media_GridError', 'Chunk': '_sg_media_Chunk', 'parse_media': '_sg_media_parse_media', 'Bits': '_sg_media_Bits', 'sps_info': '_sg_media_sps_info', 'adts_info': '_sg_media_adts_info', 'MediaSink': '_sg_media_MediaSink'}, 'mpegts': {'struct': '_sg_mpegts_struct', 'GridError': '_sg_mpegts_GridError', 'nals': '_sg_mpegts_nals', 'has_nal': '_sg_mpegts_has_nal', 'crc_mpeg': '_sg_mpegts_crc_mpeg', 'pts_bytes': '_sg_mpegts_pts_bytes', 'TSMux': '_sg_mpegts_TSMux'}, 'parent': {'json': '_sg_parent_json', 'struct': '_sg_parent_struct', 'time': '_sg_parent_time', 'dataclass': '_sg_parent_dataclass', 'parse_media': '_sg_parent_parse_media', 'Continuity': '_sg_parent_Continuity', 'Cancelled': '_sg_parent_Cancelled', 'GridError': '_sg_parent_GridError', 'endpoint': '_sg_parent_endpoint', 'parent_packet': '_sg_parent_parent_packet', 'read_frame': '_sg_parent_read_frame', 'Parent': '_sg_parent_Parent', 'parse_parents': '_sg_parent_parse_parents', 'TRANSIENT': '_sg_parent_TRANSIENT', 'receive_media': '_sg_parent_receive_media'}, 'protocol': {'ipaddress': '_sg_protocol_ipaddress', 'socket': '_sg_protocol_socket', 'struct': '_sg_protocol_struct', 'threading': '_sg_protocol_threading', 'time': '_sg_protocol_time', 'dataclass': '_sg_protocol_dataclass', 'field': '_sg_protocol_field', 'GridError': '_sg_protocol_GridError', 'Cancelled': '_sg_protocol_Cancelled', 'endpoint': '_sg_protocol_endpoint', 'Frame': '_sg_protocol_Frame', 'gateway_packet': '_sg_protocol_gateway_packet', 'center_packet': '_sg_protocol_center_packet', 'parent_packet': '_sg_protocol_parent_packet', 'read_exact': '_sg_protocol_read_exact', 'read_frame': '_sg_protocol_read_frame', 'Network': '_sg_protocol_Network'}, 'recovery': {'hashlib': '_sg_recovery_hashlib', 'OrderedDict': '_sg_recovery_OrderedDict', 'GridError': '_sg_recovery_GridError', 'Continuity': '_sg_recovery_Continuity'}, 'stream': {'threading': '_sg_stream_threading', 'time': '_sg_stream_time', 'StreamError': '_sg_stream_StreamError', 'Stream': '_sg_stream_Stream', 'StreamIO': '_sg_stream_StreamIO', 'HTTP': '_sg_stream_HTTP', 'bootstrap': '_sg_stream_bootstrap', 'discover_parent': '_sg_stream_discover_parent', 'obtain_certificate': '_sg_stream_obtain_certificate', 'MediaSink': '_sg_stream_MediaSink', 'receive_media': '_sg_stream_receive_media', 'Cancelled': '_sg_stream_Cancelled', 'GridError': '_sg_stream_GridError', 'Network': '_sg_stream_Network', 'BoundedBuffer': '_sg_stream_BoundedBuffer', 'receive': '_sg_stream_receive', 'SoopGridReader': '_sg_stream_SoopGridReader', 'SoopGridStream': '_sg_stream_SoopGridStream'}, 'plugin': {'os': '_sg_plugin_os', 're': '_sg_plugin_re', 'PluginError': '_sg_plugin_PluginError', 'Plugin': '_sg_plugin_Plugin', 'pluginargument': '_sg_plugin_pluginargument', 'pluginmatcher': '_sg_plugin_pluginmatcher', 'Config': '_sg_plugin_Config', 'GridError': '_sg_plugin_GridError', 'SoopGridStream': '_sg_plugin_SoopGridStream', 'SoopGrid': '_sg_plugin_SoopGrid', '__plugin__': '_sg_plugin___plugin__'}}
+__grid_names__ = {'auth': {'json': '_sg_auth_json', 're': '_sg_auth_re', 'SimpleCookie': '_sg_auth_SimpleCookie', 'urlsplit': '_sg_auth_urlsplit', 'requests': '_sg_auth_requests', 'GridError': '_sg_auth_GridError', 'PLAY': '_sg_auth_PLAY', 'LIVE': '_sg_auth_LIVE', 'UA': '_sg_auth_UA', 'ALLOWED': '_sg_auth_ALLOWED', 'identifier': '_sg_auth_identifier', 'HTTP': '_sg_auth_HTTP'}, 'bootstrap': {'re': '_sg_bootstrap_re', 'dataclass': '_sg_bootstrap_dataclass', 'field': '_sg_bootstrap_field', 'HTTP': '_sg_bootstrap_HTTP', 'LIVE': '_sg_bootstrap_LIVE', 'PLAY': '_sg_bootstrap_PLAY', 'identifier': '_sg_bootstrap_identifier', 'GridError': '_sg_bootstrap_GridError', 'endpoint': '_sg_bootstrap_endpoint', 'Config': '_sg_bootstrap_Config', 'Session': '_sg_bootstrap_Session', 'affirmative_no': '_sg_bootstrap_affirmative_no', 'bootstrap': '_sg_bootstrap_bootstrap'}, 'center': {'hmac': '_sg_center_hmac', 'json': '_sg_center_json', 're': '_sg_center_re', 'struct': '_sg_center_struct', 'time': '_sg_center_time', 'dataclass': '_sg_center_dataclass', 'field': '_sg_center_field', 'AUTH_IV': '_sg_center_AUTH_IV', 'AUTH_KEY': '_sg_center_AUTH_KEY', 'PREFIX': '_sg_center_PREFIX', 'SALT': '_sg_center_SALT', 'ctr': '_sg_center_ctr', 'mixed_header': '_sg_center_mixed_header', 'pad16': '_sg_center_pad16', 'wire_hash': '_sg_center_wire_hash', 'GridError': '_sg_center_GridError', 'center_packet': '_sg_center_center_packet', 'read_frame': '_sg_center_read_frame', 'ADJUST': '_sg_center_ADJUST', 'JOINLOG': '_sg_center_JOINLOG', 'valid_seed': '_sg_center_valid_seed', 'Credentials': '_sg_center_Credentials', 'auth_body': '_sg_center_auth_body', 'join_body': '_sg_center_join_body', 'json_body': '_sg_center_json_body', 'discover_parent': '_sg_center_discover_parent'}, 'crypto': {'struct': '_sg_crypto_struct', 'AES': '_sg_crypto_AES', 'MASK': '_sg_crypto_MASK', 'leftWords': '_sg_crypto_leftWords', 'rightWords': '_sg_crypto_rightWords', 'leftShifts': '_sg_crypto_leftShifts', 'rightShifts': '_sg_crypto_rightShifts', '_boolean': '_sg_crypto__boolean', '_block': '_sg_crypto__block', 'wire_hash': '_sg_crypto_wire_hash', 'pad16': '_sg_crypto_pad16', 'ctr': '_sg_crypto_ctr', 'PREFIX': '_sg_crypto_PREFIX', 'SALT': '_sg_crypto_SALT', 'SERVICE_KEY': '_sg_crypto_SERVICE_KEY', 'SERVICE_IV': '_sg_crypto_SERVICE_IV', 'AUTH_KEY': '_sg_crypto_AUTH_KEY', 'AUTH_IV': '_sg_crypto_AUTH_IV', 'mixed_header': '_sg_crypto_mixed_header', 'service6': '_sg_crypto_service6'}, 'gateway': {'secrets': '_sg_gateway_secrets', 'struct': '_sg_gateway_struct', 'time': '_sg_gateway_time', 'service6': '_sg_gateway_service6', 'GridError': '_sg_gateway_GridError', 'gateway_packet': '_sg_gateway_gateway_packet', 'read_frame': '_sg_gateway_read_frame', 'login_packet': '_sg_gateway_login_packet', 'certificate_packet': '_sg_gateway_certificate_packet', 'validate_login': '_sg_gateway_validate_login', 'obtain_certificate': '_sg_gateway_obtain_certificate'}, 'h264clock': {'dataclass': '_sg_h264clock_dataclass', 'Fraction': '_sg_h264clock_Fraction', 'nals': '_sg_h264clock_nals', 'GridError': '_sg_h264clock_GridError', 'Reader': '_sg_h264clock_Reader', 'rbsp': '_sg_h264clock_rbsp', 'skip_scaling_list': '_sg_h264clock_skip_scaling_list', 'skip_hrd': '_sg_h264clock_skip_hrd', '_MAX_DPB_MBS': '_sg_h264clock__MAX_DPB_MBS', 'inferred_reorder': '_sg_h264clock_inferred_reorder', 'parse_sps': '_sg_h264clock_parse_sps', 'parse_vui': '_sg_h264clock_parse_vui', 'parse_pps': '_sg_h264clock_parse_pps', 'Picture': '_sg_h264clock_Picture', 'parse_slice': '_sg_h264clock_parse_slice', 'H264Clock': '_sg_h264clock_H264Clock'}, 'media': {'hashlib': '_sg_media_hashlib', 'json': '_sg_media_json', 'os': '_sg_media_os', 'struct': '_sg_media_struct', 'dataclass': '_sg_media_dataclass', 'field': '_sg_media_field', 'Path': '_sg_media_Path', 'H264Clock': '_sg_media_H264Clock', 'TSMux': '_sg_media_TSMux', 'nals': '_sg_media_nals', 'GridError': '_sg_media_GridError', 'Chunk': '_sg_media_Chunk', 'parse_media': '_sg_media_parse_media', 'Bits': '_sg_media_Bits', 'sps_info': '_sg_media_sps_info', 'adts_info': '_sg_media_adts_info', 'MediaSink': '_sg_media_MediaSink'}, 'mpegts': {'struct': '_sg_mpegts_struct', 'GridError': '_sg_mpegts_GridError', 'nals': '_sg_mpegts_nals', 'has_nal': '_sg_mpegts_has_nal', 'crc_mpeg': '_sg_mpegts_crc_mpeg', 'pts_bytes': '_sg_mpegts_pts_bytes', 'TSMux': '_sg_mpegts_TSMux'}, 'parent': {'json': '_sg_parent_json', 'struct': '_sg_parent_struct', 'time': '_sg_parent_time', 'dataclass': '_sg_parent_dataclass', 'parse_media': '_sg_parent_parse_media', 'Continuity': '_sg_parent_Continuity', 'Cancelled': '_sg_parent_Cancelled', 'GridError': '_sg_parent_GridError', 'endpoint': '_sg_parent_endpoint', 'parent_packet': '_sg_parent_parent_packet', 'read_frame': '_sg_parent_read_frame', 'Parent': '_sg_parent_Parent', 'parse_parents': '_sg_parent_parse_parents', 'TRANSIENT': '_sg_parent_TRANSIENT', 'receive_media': '_sg_parent_receive_media'}, 'protocol': {'ipaddress': '_sg_protocol_ipaddress', 'socket': '_sg_protocol_socket', 'struct': '_sg_protocol_struct', 'threading': '_sg_protocol_threading', 'time': '_sg_protocol_time', 'dataclass': '_sg_protocol_dataclass', 'field': '_sg_protocol_field', 'GridError': '_sg_protocol_GridError', 'Cancelled': '_sg_protocol_Cancelled', 'endpoint': '_sg_protocol_endpoint', 'Frame': '_sg_protocol_Frame', 'gateway_packet': '_sg_protocol_gateway_packet', 'center_packet': '_sg_protocol_center_packet', 'parent_packet': '_sg_protocol_parent_packet', 'read_exact': '_sg_protocol_read_exact', 'read_frame': '_sg_protocol_read_frame', 'Network': '_sg_protocol_Network'}, 'recovery': {'hashlib': '_sg_recovery_hashlib', 'OrderedDict': '_sg_recovery_OrderedDict', 'GridError': '_sg_recovery_GridError', 'Continuity': '_sg_recovery_Continuity'}, 'stream': {'threading': '_sg_stream_threading', 'time': '_sg_stream_time', 'logging': '_sg_stream_logging', 'StreamError': '_sg_stream_StreamError', 'Stream': '_sg_stream_Stream', 'StreamIO': '_sg_stream_StreamIO', 'HTTP': '_sg_stream_HTTP', 'bootstrap': '_sg_stream_bootstrap', 'discover_parent': '_sg_stream_discover_parent', 'obtain_certificate': '_sg_stream_obtain_certificate', 'MediaSink': '_sg_stream_MediaSink', 'receive_media': '_sg_stream_receive_media', 'Cancelled': '_sg_stream_Cancelled', 'GridError': '_sg_stream_GridError', 'Network': '_sg_stream_Network', '_log': '_sg_stream__log', '_INITIAL_TRANSPORT_FAILURES': '_sg_stream__INITIAL_TRANSPORT_FAILURES', 'BoundedBuffer': '_sg_stream_BoundedBuffer', 'receive': '_sg_stream_receive', 'SoopGridReader': '_sg_stream_SoopGridReader', 'SoopGridStream': '_sg_stream_SoopGridStream', 'OfficialHLSFallback': '_sg_stream_OfficialHLSFallback', 'SoopAutoStream': '_sg_stream_SoopAutoStream'}, 'plugin': {'os': '_sg_plugin_os', 're': '_sg_plugin_re', 'logging': '_sg_plugin_logging', 'PluginError': '_sg_plugin_PluginError', 'Plugin': '_sg_plugin_Plugin', 'pluginargument': '_sg_plugin_pluginargument', 'pluginmatcher': '_sg_plugin_pluginmatcher', 'Config': '_sg_plugin_Config', 'GridError': '_sg_plugin_GridError', 'OfficialHLSFallback': '_sg_plugin_OfficialHLSFallback', 'SoopAutoStream': '_sg_plugin_SoopAutoStream', 'SoopGridStream': '_sg_plugin_SoopGridStream', 'log': '_sg_plugin_log', 'official_hls_streams': '_sg_plugin_official_hls_streams', 'SoopGridPlugin': '_sg_plugin_SoopGridPlugin', '__plugin__': '_sg_plugin___plugin__'}}

@@ -1,107 +1,102 @@
-# Python SOOP Native Grid Streamlink PoC
+# SOOP Native Grid Streamlink Plugin
 
-This standalone experimental Streamlink sideload plugin ports the native TCP Go receiver in [../grid-poc](../grid-poc/README.md). It implements account/public bootstrap, Gateway, Center, Parent, H.264/AAC extraction and MPEG-TS packetization in Python. It supplies TS bytes through Streamlink's public `Stream`/`StreamIO` interface. There is no Go subprocess, SOOP agent, or HLS delivery in this receiver. AES uses PyCryptodome, already a normal Streamlink dependency.
+An experimental, single-file Streamlink plugin for the native SOOP TCP Grid
+transport. The canonical implementation is the Python package in this directory;
+`dist/soop.py` is generated from it. It preserves H.264/AAC without transcoding and
+emits MPEG-TS through Streamlink's `StreamIO`.
 
-The plugin is named `soop.py` and **replaces the built-in SOOP HLS plugin for the invocation that loads it**. Only Native Grid is provided. Omit `--plugin-dirs` to use the ordinary built-in SOOP plugin. The production source adapter and Go PoC are separate and unchanged.
+## Install one file
 
-## One-file install
+Install Streamlink normally, then copy `dist/soop.py` as **`soopgrid.py`** into the
+user plugin directory. The filename is intentional: it lets this plugin coexist
+with Streamlink's maintained built-in `soop` HLS plugin. Installation paths,
+update/removal commands, and clean-environment evidence are in
+[docs/SINGLEFILE.md](docs/SINGLEFILE.md).
 
-Download [dist/soop.py](dist/soop.py) and copy it to Streamlink's user plugin directory.
-No project-package installation is needed. See [SINGLEFILE.md](docs/SINGLEFILE.md)
-for macOS/Linux/Windows paths, exact commands, update/removal and clean-venv evidence.
-The modular sources below remain the development reference.
+The tested baseline is Streamlink 8.6.2 on Linux/Python 3.12.3. The source is
+AGPL-3.0-only. No project package, Go subprocess, Grid Agent, FFmpeg receive process,
+or Streamlink core modification is required. Streamlink's ordinary dependencies
+remain required.
 
-[RELIABILITY.md](docs/RELIABILITY.md) documents exact-target public bootstrap,
-bounded Parent failover, overlap-only cache recovery and explicit gap failure.
-Live failover is **not verified**. The latest live test decoded H.264/AAC, but the
-PTS-only muxer still produces DTS timeline warnings with B-frame source material.
-
-## Install
-
-Python 3.10+ and official Streamlink 8.6.2 are the tested API baseline. From this directory:
+## Transport modes
 
 ```sh
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install 'streamlink==8.6.2' '.[test]'
+# Grid only
+streamlink --plugin-dir ./plugins --soop-grid-transport grid \
+  'https://play.sooplive.com/CHANNEL_ID/BNO' original -o recording.ts
+
+# Maintained Streamlink SOOP HLS plugin only
+streamlink --plugin-dir ./plugins --soop-grid-transport hls \
+  'https://play.sooplive.com/CHANNEL_ID/BNO' best -o recording.ts
+
+# Grid first; use official HLS only if Grid fails before emitting media
+streamlink --plugin-dir ./plugins --soop-grid-transport auto \
+  'https://play.sooplive.com/CHANNEL_ID/BNO' original -o recording.ts
 ```
 
-Install the package before sideloading `plugins/soop.py`; the plugin imports the installed `soop_grid` package and does not modify `sys.path` or Streamlink files. Both editable and ordinary wheel installations were checked from an unrelated working directory.
+`auto` falls back only for a bounded set of initial transport failures. It does not
+fall back after authorization denial, malformed protocol/media, unsupported timing,
+or after Grid bytes have been returned. It never mixes independent HLS and Grid
+timelines in one output.
 
-## Public stream: file, stdout, or player
+Grid records until the broadcast ends, the user stops Streamlink, or an optional
+limit is reached. `--soop-grid-duration SECONDS` sets a duration budget beginning at
+Parent reception; omission means no duration limit. `--soop-grid-max-bytes BYTES`
+optionally caps received Grid wire bytes. Streamlink's own `--stream-timeout` controls
+reader/backpressure waits; `--ringbuffer-size` controls the bounded output buffer.
 
-Use a current stream you are allowed to watch and record. Replace `CHANNEL_ID` and `BNO` with the actual target. The anonymous path validates the exact target directly with Live metadata and requires a normally issued Watch Ticket. No live-list page is required. Explicit restrictions and server denial fail closed; see [RELIABILITY.md](docs/RELIABILITY.md) for policy coverage and bounded Parent recovery.
+Use only a broadcast you are authorized to watch and record. Public bootstrap checks
+the exact channel and BNO using live metadata and requires a server-issued Watch
+ticket. Account credentials are read from `SOOP_ACCOUNT_ID` and
+`SOOP_ACCOUNT_PASSWORD`; a broadcast password may be supplied through
+`SOOP_STREAM_PASSWORD`. The broadcast password is sent only through the normal
+Center JOIN field. Do not put secrets in shell history or share logs containing
+private capture data.
 
-```sh
-streamlink --plugin-dirs "$PWD/plugins" --stream-types grid \
-  --retry-open 1 --soop-grid-duration 35 \
-  https://play.sooplive.com/CHANNEL_ID/BNO original -o recording.ts
+Optional arguments:
 
-streamlink --plugin-dirs "$PWD/plugins" --stream-types grid \
-  --soop-grid-duration 35 \
-  https://play.sooplive.com/CHANNEL_ID/BNO original --stdout > recording-stdout.ts
+- `--soop-grid-account`: account ID instead of `SOOP_ACCOUNT_ID`
+- `--soop-grid-require-adult`: require the authenticated API's adult-check marker
+- `--soop-grid-stream-password`: broadcast password (environment input is safer)
+- `--soop-grid-duration`: optional Grid receive duration
+- `--soop-grid-max-bytes`: optional Grid wire-byte limit
 
-streamlink --plugin-dirs "$PWD/plugins" --stream-types grid \
-  --soop-grid-duration 35 \
-  https://play.sooplive.com/CHANNEL_ID/BNO original --player mpv
-```
+The requested quality label `original` is not proof of output resolution. Inspect
+actual SPS/codec metadata.
 
-File output and stdout were live-tested. Player output uses the same `StreamIO`; an interactive mpv/VLC session was not tested. Channel-only URLs are also recognized: the plugin resolves the current BNO from the normal first-party player page and fixes that BNO for the session.
+## Current reliability boundary
 
-The stream is called `original`, with stream type `grid`. This is a requested quality, not proof of a resolution; check the actual codec metadata. Sessions default to 35 seconds and are limited to 1–60 seconds and 512 MiB of incoming media wire bytes. This is a bounded PoC, not an indefinite recorder.
+The plugin uses one active Parent and bounded failover to other server-issued
+candidates, with at most one Center rediscovery per outage. Recovery accepts only an
+exact cached overlap and consecutive next frames; it reports and terminates on an
+unprovable gap. It does not claim seamless or lossless recovery from every outage.
+Multi-Parent active-active reception is not implemented because simultaneous
+connections and shared frame numbering have not been verified against SOOP.
 
-## Native account and protected streams
+H.264 TS output now derives DTS from the observed Grid decode-order clock and PTS
+from H.264 POC plus fixed VUI frame timing. Unsupported timing/POC structures are
+rejected rather than assigned guessed timestamps. Synthetic B-frame/AAC TS passes
+full FFmpeg decoding and monotonic DTS checks. An existing private 1080p30 Grid
+capture also passes the new full decode check; this is not a new live capture or a
+long-duration test. A/V offsets are preserved from the common observed Grid clock;
+independent perceptual sync was not measured.
 
-Use an authorized account. Secrets are read from the process environment, never from password CLI flags, and are not persisted. In Bash:
+Default recording is continuous, with bounded in-memory queues. Automatic credential
+refresh, broadcast rollover, crash-resume, and multi-hour live stability have not
+been verified. See [docs/PRODUCTION_READINESS_RESULT.md](docs/PRODUCTION_READINESS_RESULT.md),
+[architecture](docs/ARCHITECTURE.md), [reliability policy](docs/RELIABILITY.md), and
+[limitations](docs/LIMITATIONS.md).
 
-```sh
-export SOOP_ACCOUNT_ID=ACCOUNT_ID
-read -r -s -p 'SOOP account password: ' SOOP_ACCOUNT_PASSWORD
-printf '\n'
-export SOOP_ACCOUNT_PASSWORD
-streamlink --plugin-dirs "$PWD/plugins" --stream-types grid \
-  --retry-open 1 --soop-grid-require-adult --soop-grid-duration 35 \
-  https://play.sooplive.com/CHANNEL_ID/BNO original -o authenticated.ts
-unset SOOP_ACCOUNT_ID SOOP_ACCOUNT_PASSWORD
-```
-
-Omit `--soop-grid-require-adult` for an ordinary authenticated stream. It requires `ACHK=1` in the authenticated live response; it does not establish the broadcast grade on its own. The server remains responsible for authorization. No CAPTCHA or identity-verification automation is provided.
-
-For a password-protected target, also set `SOOP_STREAM_PASSWORD` with a silent prompt before the command. It is restricted to printable ASCII, 1–12 bytes, and is placed only in native Center JOIN Service 70 `passwd`. It is never sent as HTTP metadata `pwd` or in the Gateway login. The target's `BPWD` state must agree with whether a stream password was supplied. Account-based adult and password paths have synthetic tests; Python live validation of those protected paths is **NOT_TESTED**.
-
-Implemented plugin options are `--soop-grid-account` (alternative to `SOOP_ACCOUNT_ID`, marked sensitive), `--soop-grid-require-adult`, and `--soop-grid-duration`. Normal Streamlink options such as `--stream-timeout`, `--ringbuffer-size`, `--output` and `--stdout` apply. Enumeration (`--json`) is deferred and does not authenticate or prove media access. Enumerate again in a fresh process to open a new session; Stream objects are single-use.
-
-## Optional private raw evidence
-
-Set `SOOP_GRID_CAPTURE_DIR` to a **new, nonexistent** directory under an existing private parent. It creates mode-0700 directories and mode-0600 raw files:
-
-```sh
-mkdir -m 700 -p captures
-export SOOP_GRID_CAPTURE_DIR="$PWD/captures/private-run-001"
-# Run one of the commands above, using a new recording output filename.
-unset SOOP_GRID_CAPTURE_DIR
-```
-
-Outputs are `grid-wire.bin` (received media packets only), `grid-payload.bin`, `video.h264`, `audio.aac`, `recording.ts`, `frames.jsonl`, and `grid-analysis.json`. Keep raw evidence private; none is included in Git. The summary contains fixed stage facts, counts, media metadata and hashes, with no account, target, cookie, ticket, or endpoint values. `audio_frames` counts Grid audio chunks, which can each contain multiple ADTS frames.
-
-Optional post-capture verification/remux:
+## Development checks
 
 ```sh
-ffprobe -v error -show_streams -show_format -of json recording.ts
-ffmpeg -v error -xerror -i recording.ts -map 0:v:0 -map 0:a:0 -f null -
-ffmpeg -i recording.ts -map 0:v:0 -map 0:a:0 -c copy playable.mp4
-```
-
-FFmpeg is not invoked by the plugin.
-
-## Offline checks and evidence
-
-```sh
+python tools/build_singlefile.py
+python tools/build_singlefile.py --check
 python -m pytest -q
 ruff check .
 ruff format --check .
-python -m compileall -q soop_grid plugins
-streamlink --plugin-dirs "$PWD/plugins" --can-handle-url https://play.sooplive.com/CHANNEL_ID/BNO
 ```
 
-Tests use synthetic credentials and packet data only; they do not contact SOOP. Local socketpair tests require local socket I/O permission. The Go-generated golden vectors cover the native hash quirk, Service 6, Gateway login/certificate, Center auth/JOIN and byte-identical TS output. See [VALIDATION.md](docs/VALIDATION.md), [architecture](docs/ARCHITECTURE.md), and [limitations/license notes](docs/LIMITATIONS.md).
+The local TCP fault-injection tests use loopback sockets. See
+[docs/VALIDATION.md](docs/VALIDATION.md) for the distinction between offline,
+historical-live, and current-live evidence.

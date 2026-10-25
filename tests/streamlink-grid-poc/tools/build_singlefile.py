@@ -189,7 +189,7 @@ class Linker(ast.NodeTransformer):
 
 def build():
     paths = {p.stem: p for p in sorted((ROOT / "soop_grid").glob("*.py")) if p.stem != "__init__"}
-    paths["plugin"] = ROOT / "plugins" / "soop.py"
+    paths["plugin"] = ROOT / "plugins" / "soopgrid.py"
     sources = {name: p.read_text() for name, p in paths.items()}
     trees = {name: ast.parse(source) for name, source in sources.items()}
     tables = {name: symtable.symtable(source, str(paths[name]), "exec") for name, source in sources.items()}
@@ -259,13 +259,22 @@ def main():
     parser.add_argument("--output", type=Path, default=ROOT / "dist" / "soop.py")
     args = parser.parse_args()
     result = build()
+    digest = hashlib.sha256(result.encode()).hexdigest()
+    checksum = args.output.parent / "SHA256SUMS"
+    checksum_text = f"{digest}  {args.output.name}\n"
     if args.check:
-        if not args.output.exists() or args.output.read_text() != result:
+        if (
+            not args.output.exists()
+            or args.output.read_text() != result
+            or not checksum.exists()
+            or checksum.read_text() != checksum_text
+        ):
             raise SystemExit("single-file output stale; regenerate")
     else:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(result)
-    print(hashlib.sha256(result.encode()).hexdigest())
+        checksum.write_text(checksum_text)
+    print(digest)
 
 
 if __name__ == "__main__":

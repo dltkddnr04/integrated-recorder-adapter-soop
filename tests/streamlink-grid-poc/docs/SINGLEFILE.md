@@ -1,17 +1,17 @@
-# Standalone distribution
+# Single-file distribution
 
-`dist/soop.py` is a readable, static Python file generated from the canonical modular
-sources and `plugins/soop.py`. No separate `soop_grid` package, pip installation of
-this project, Go process, SOOP agent, FFmpeg receive process, encoded source archive,
-`exec`/`eval`, import hook, source-path search or runtime code download is used.
-Streamlink's normal dependencies (including requests and PyCryptodome) remain needed.
-Do not vendor those dependencies.
+`dist/soop.py` is readable static Python generated from canonical modular sources.
+No project package, Go helper, SOOP agent, Streamlink core patch, import hook, runtime
+`exec`/`eval`, archive loader, or code download is used. Only normal Streamlink
+dependencies are required. Do not vendor those dependencies.
 
-## Install one file
+## Install
 
-Streamlink 8.6.2 and Python 3.12.3 were runtime-tested on Linux. Python 3.10+ syntax is
-checked; other Python versions and macOS/Windows runtime are not verified. Homebrew's
-current version can differ from the tested Streamlink version.
+The distribution artifact is named `soop.py`; install it as **`soopgrid.py`** so the
+custom plugin has its own Streamlink plugin ID and can coexist with the built-in
+`soop` HLS plugin. Streamlink 8.6.2 / Python 3.12.3 was tested on Linux. Other OS
+plugin directories follow Streamlink 8.6.2's official CLI constants but are not
+runtime-tested here.
 
 macOS:
 
@@ -19,53 +19,56 @@ macOS:
 brew install streamlink
 mkdir -p "$HOME/Library/Application Support/streamlink/plugins"
 curl -fL 'https://raw.githubusercontent.com/integrated-recorder/source.soop/main/tests/streamlink-grid-poc/dist/soop.py' \
-  -o "$HOME/Library/Application Support/streamlink/plugins/soop.py"
+  -o "$HOME/Library/Application Support/streamlink/plugins/soopgrid.py"
 ```
 
-If you already downloaded `soop.py`, use:
-
-```sh
-cp soop.py "$HOME/Library/Application Support/streamlink/plugins/soop.py"
-```
-
-Linux (Streamlink already installed):
+Linux:
 
 ```sh
 mkdir -p "${XDG_DATA_HOME:-$HOME/.local/share}/streamlink/plugins"
-cp soop.py "${XDG_DATA_HOME:-$HOME/.local/share}/streamlink/plugins/soop.py"
+cp soop.py "${XDG_DATA_HOME:-$HOME/.local/share}/streamlink/plugins/soopgrid.py"
 ```
 
-Windows PowerShell (Streamlink already installed):
+Windows PowerShell:
 
 ```powershell
 New-Item -ItemType Directory -Force "$env:APPDATA\streamlink\plugins"
-Copy-Item soop.py "$env:APPDATA\streamlink\plugins\soop.py"
+Copy-Item soop.py "$env:APPDATA\streamlink\plugins\soopgrid.py"
 ```
 
-These paths follow the installed official Streamlink 8.6.2 `streamlink_cli/constants.py`.
-An explicit directory works independently of OS discovery:
+Check discovery:
 
 ```sh
-streamlink --plugin-dir /path/to/plugins --can-handle-url \
-  'https://play.sooplive.com/CHANNEL_ID/BNO'
-streamlink --plugin-dir /path/to/plugins --stream-types grid \
-  --soop-grid-duration 20 'https://play.sooplive.com/CHANNEL_ID/BNO' original -o recording.ts
+streamlink --can-handle-url 'https://play.sooplive.com/CHANNEL_ID/BNO'
 ```
 
-Use only a target you may access and record. URL/JSON discovery is offline enumeration,
-not proof of media access. Anonymous opens directly validate exact Live metadata and
-normal Watch authorization. Account/password/adult environment settings and bounded
-capture options are the same as the modular plugin; see the main PoC README.
+## Usage
 
-Installing this file overrides Streamlink's built-in `soop` plugin with Grid-only
-behavior. It does not add an HLS fallback. No core file is changed. To update, replace
-this one file with a newly generated/released copy. To uninstall, remove only the
-installed `soop.py`; the built-in SOOP HLS plugin becomes available again. Do not
-remove files from Streamlink's own installation.
+```sh
+# Grid only, unlimited until user stop / broadcast termination
+streamlink --soop-grid-transport grid 'https://play.sooplive.com/CHANNEL_ID/BNO' original -o recording.ts
 
-## Rebuild and verify
+# Official Streamlink HLS only
+streamlink --soop-grid-transport hls 'https://play.sooplive.com/CHANNEL_ID/BNO' best -o recording.ts
 
-From this directory, using the developer/test environment:
+# Grid, then official HLS only for an allowlisted pre-output transport failure
+streamlink --soop-grid-transport auto 'https://play.sooplive.com/CHANNEL_ID/BNO' original -o recording.ts
+
+# Optional bounds
+streamlink --soop-grid-duration 3600 --soop-grid-max-bytes 500000000 \
+  'https://play.sooplive.com/CHANNEL_ID/BNO' original -o recording.ts
+```
+
+HLS mode delegates to the Streamlink built-in SOOP plugin; that plugin is not copied
+into this artifact. `auto` is one-way fallback before the Grid stream emits bytes; it
+never combines separate timelines. Broadcast access/password/account rules are
+documented in the main README. Use only streams you are authorized to watch and
+record.
+
+To update, replace the installed `soopgrid.py` with the new `dist/soop.py` contents.
+To uninstall, remove only that file; Streamlink's built-in SOOP HLS plugin remains.
+
+## Build and parity verification
 
 ```sh
 python tools/build_singlefile.py
@@ -74,34 +77,18 @@ python -m pytest -q
 python tools/test_bundle.py -q
 ```
 
-The builder is specialized to this source tree. It uses AST + Python symbol tables,
-resolves top-level and delayed internal imports into ordinary assignments, prefixes
-module globals, preserves function locals/closures/comprehensions/class attributes,
-and topologically orders dependencies. Exceptions retain object identity across
-import aliases. Dataclass annotations and Streamlink decorators are normal Python.
-Unsupported import cycles/constructs fail instead of using a runtime loader. Source
-module hashes are embedded as comments. Generation is deterministic on the tested
-Python 3.12 toolchain; AST formatting across Python toolchain versions is not promised.
-Never hand-format/edit `dist/soop.py`; edit modular source and regenerate instead.
+The generated `dist/SHA256SUMS` records the artifact digest; after downloading the
+file, compare it with the published checksum for the same commit/release.
 
-`tools/test_bundle.py` is a **test-only** adapter that exposes bundled objects under
-module names expected by the existing tests. It is not shipped in the distribution
-file and installs no runtime import hook. All original regression/fault cases execute
-against those objects. Additional tests run the real CLI with a copied single file.
-
-## Clean installation validation
-
-A new `/tmp/soop-grid-clean-venv` was provisioned with `streamlink==8.6.2` and official
-transitive dependencies only. The host lacks system ensurepip, so an official pip
-wheel was used as an external installer for the new venv; system Python was unchanged.
-Neither this project nor `soop_grid` was installed. With PYTHONPATH unset, from an
-unrelated directory, a copied `soop.py` passed URL discovery, JSON Grid enumeration,
-CLI options, built-in override, secret-log tests and public live Grid capture.
-Use `SOOP_GRID_CLEAN_PYTHON=/path/to/clean/python` with pytest to repeat CLI checks.
+The specialized AST/symbol-table bundler resolves the known internal module graph,
+prefixes internal globals and preserves dataclass identity and lazy imports. Unsupported
+cycles or constructs fail at build time. `dist/soop.py` is generated, never edited by
+hand. The isolated CLI test copies only this artifact to a temporary `soopgrid.py`,
+uses a fresh venv containing Streamlink 8.6.2 and official dependencies only, removes
+PYTHONPATH, and runs from an unrelated directory.
 
 ## License
 
-SPDX: AGPL-3.0-only. Copyright (c) 2026 source.soop contributors.
-The generated file identifies the original repository and license URL. All protocol
-implementation is derived from the same AGPL research source; generation does not
-relicense it. Streamlink and PyCryptodome are imported, not copied or relicensed.
+SPDX `AGPL-3.0-only`, Copyright (c) 2026 source.soop contributors. The bundled code
+is derived from this repository's AGPL Go/Python work. Streamlink and its dependencies
+remain separate packages under their own licenses and are not vendored or relabeled.

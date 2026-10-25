@@ -74,10 +74,10 @@ def test_bundle_identity_dataclasses_and_golden_packets(bundle, golden):
         assert single.add(kind, timestamp, payload) == original.add(kind, timestamp, payload)
 
 
-def test_singlefile_plugin_override_without_package_install(tmp_path):
+def test_singlefile_plugin_coexists_with_builtin_without_package_install(tmp_path):
     plugin_dir = tmp_path / "plugins"
     plugin_dir.mkdir()
-    (plugin_dir / "soop.py").write_bytes((ROOT / "dist" / "soop.py").read_bytes())
+    (plugin_dir / "soopgrid.py").write_bytes((ROOT / "dist" / "soop.py").read_bytes())
     python = os.environ.get("SOOP_GRID_CLEAN_PYTHON", sys.executable)
     env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
     base = [python, "-m", "streamlink_cli", "--plugin-dir", str(plugin_dir)]
@@ -87,7 +87,7 @@ def test_singlefile_plugin_override_without_package_install(tmp_path):
     )
     assert result.returncode == 0
     result = subprocess.run(
-        base + ["--json", "--soop-grid-duration", "12", target],
+        base + ["--json", "--soop-grid-transport", "grid", "--soop-grid-duration", "3600", target],
         env=env,
         cwd=tmp_path,
         capture_output=True,
@@ -95,6 +95,7 @@ def test_singlefile_plugin_override_without_package_install(tmp_path):
     )
     assert result.returncode == 0, result.stderr
     data = json.loads(result.stdout)
+    assert data["plugin"] == "soopgrid"
     assert data["streams"]["original"]["type"] == "grid"
     if "SOOP_GRID_CLEAN_PYTHON" in os.environ:
         probe = subprocess.run(
@@ -109,9 +110,9 @@ def test_singlefile_plugin_override_without_package_install(tmp_path):
     session = Streamlink()
     session.plugins.load_path(str(plugin_dir))
     _, cls, url = session.resolve_url(target)
-    assert cls.__module__.endswith("soop")
-    assert cls.__name__ == "_sg_plugin_SoopGrid"
-    assert cls(session, url).streams()["original"].config.bno == "12345"
+    assert cls.__module__.endswith("soopgrid")
+    assert cls.__name__ == "_sg_plugin_SoopGridPlugin"
+    assert cls(session, url).streams()["original"].grid.config.bno == "12345"
 
 
 def test_singlefile_cli_secrets_do_not_leak(tmp_path):
@@ -160,7 +161,7 @@ def factory(VALUE):
 def comp():
     return [VALUE for VALUE in range(3)], VALUE
 """)
-    (tmp_path / "plugins" / "soop.py").write_text("""from soop_grid.base import Item, factory, comp
+    (tmp_path / "plugins" / "soopgrid.py").write_text("""from soop_grid.base import Item, factory, comp
 
 def lazy():
     from soop_grid.base import VALUE

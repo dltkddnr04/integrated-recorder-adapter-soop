@@ -69,32 +69,38 @@ TRANSIENT = {
 
 
 def receive_media(
-    network, parents, bno, node_key, sink, report, duration=35, max_bytes=512 << 20, rediscover=None
+    network, parents, bno, node_key, sink, report, duration=None, max_bytes=None, rediscover=None
 ):
-    if not 1 <= duration <= 60 or not 0 < max_bytes <= 512 << 20:
+    if duration is not None and (type(duration) not in (int, float) or duration <= 0):
         raise GridError("capture_limits_invalid")
-    # One budget, including connect/backoff/rediscovery. Never reset on failover.
-    deadline = time.monotonic() + duration
+    if max_bytes is not None and (type(max_bytes) is not int or max_bytes <= 0):
+        raise GridError("capture_limits_invalid")
+    # One capture budget, including connect/backoff/rediscovery. Never reset on failover.
+    deadline = time.monotonic() + duration if duration is not None else None
     if hasattr(network, "deadline"):
         network.deadline = deadline
     stats = sink.stats if sink is not None else {}
     continuity = Continuity(stats, report)
     queue = list(parents)
-    attempts = packets = requests = 0
+    attempts = packets_without_media = requests_without_media = 0
+    rediscoveries_this_outage = 0
     quality = None
     last_error = "no_usable_server_parent"
     while not network.stop.is_set():
-        if time.monotonic() >= deadline:
+        if deadline is not None and time.monotonic() >= deadline:
             if continuity.recovering:
                 continuity.reject("recovery_deadline_exhausted")
+            stats["stop_reason"] = "duration_limit"
+            report("grid_duration_limit_reached")
             return
         if not queue:
-            if rediscover is None or stats["rediscoveries"] >= 1 or attempts >= 8:
+            if rediscover is None or rediscoveries_this_outage >= 1 or attempts >= 8:
                 report("parent_failover_exhausted")
                 if continuity.recovering:
                     continuity.reject("recovery_candidates_exhausted")
                 raise GridError(last_error)
             stats["rediscoveries"] += 1
+            rediscoveries_this_outage += 1
             report("parent_rediscovery_started")
             # This is a NEW Center connection; use its newly issued node key.
             # Expired/denied certificates are terminal, never forged/refreshed implicitly.
@@ -113,10 +119,11 @@ def receive_media(
         if attempts:
             stats["failover_attempts"] += 1
             report("parent_failover_started")
-            if network.stop.wait(min(0.1, max(0, deadline - time.monotonic()))):
+            backoff = 0.1 if deadline is None else min(0.1, max(0, deadline - time.monotonic()))
+            if network.stop.wait(backoff):
                 raise Cancelled("receiver_closed")
         attempts += 1
-        stats["parent_connection_attempts"] = attempts
+        stats["parent_connection_attempts"] = stats.get("parent_connection_attempts", 0) + 1
         sock = None
         try:
             sock = network.connect(parent.address)
@@ -139,23 +146,26 @@ def receive_media(
 
             send(0xCB2E, struct.pack("<III", bno, node_key, parent.quality))
             while not network.stop.is_set():
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
+                remaining = None if deadline is None else deadline - time.monotonic()
+                if remaining is not None and remaining <= 0:
                     if continuity.recovering:
                         continuity.reject("recovery_deadline_exhausted")
+                    stats["stop_reason"] = "duration_limit"
+                    report("grid_duration_limit_reached")
                     return
-                frame = read_frame(sock, "parent", min(3, remaining))
-                packets += 1
-                if packets > 8192:
+                frame = read_frame(sock, "parent", 3 if remaining is None else min(3, remaining))
+                stats["parent_packets"] = stats.get("parent_packets", 0) + 1
+                packets_without_media += 1
+                if packets_without_media > 8192:
                     raise GridError("parent_packet_limit")
                 if frame.result < 0:
                     raise GridError("parent_access_denied")
                 if frame.command in (0xC746, 0x1BC7):
                     send(0xCB2F, struct.pack("<I", parent.quality))
                 elif frame.command == 0xC747:
-                    requests += 1
+                    requests_without_media += 1
                     connection_requests += 1
-                    if requests > 45:
+                    if requests_without_media > 45:
                         raise GridError("cache_request_limit")
                     if not 0 <= cache_start < (1 << 64):
                         raise GridError("cache_frame_bounds")
@@ -170,19 +180,22 @@ def receive_media(
                         send(0xCB2B)
                         live_started = True
                 elif frame.command == 0xC748:
-                    if stats["wire_bytes"] + len(frame.wire) > max_bytes:
+                    if max_bytes is not None and stats["wire_bytes"] + len(frame.wire) > max_bytes:
+                        stats["stop_reason"] = "byte_limit"
+                        report("grid_media_byte_limit_reached")
                         return
                     chunk = parse_media(frame.body)
                     accepted = continuity.accept(chunk)
                     sink.add(frame, discard=not accepted) if not accepted else sink.add(frame)
                     if accepted:
                         continuity.committed()
+                        packets_without_media = 0
+                        requests_without_media = 0
+                        attempts = 0
+                        rediscoveries_this_outage = 0
                         if live_started and resume_live_pending:
                             report("grid_live_resumed")
                             resume_live_pending = False
-                        if attempts > 1 and stats["failover_successes"] == 0:
-                            stats["failover_successes"] += 1
-                            report("parent_failover_succeeded")
                         quality = parent.quality
                         cache_start = chunk.frame + 1
                     last_media = time.monotonic()
@@ -197,6 +210,7 @@ def receive_media(
                 raise Cancelled("receiver_closed") from None
             if (
                 str(exc) in ("network_read_timeout", "capture_deadline_reached")
+                and deadline is not None
                 and time.monotonic() >= deadline
             ):
                 if continuity.recovering:
