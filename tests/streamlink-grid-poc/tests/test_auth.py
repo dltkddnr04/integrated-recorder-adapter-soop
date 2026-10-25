@@ -196,3 +196,78 @@ def test_adult_denial_and_watch_denial_never_fall_through():
 def test_invalid_secret_options(kwargs):
     with pytest.raises(GridError):
         Config("fixture_channel", "12345", **kwargs).validate()
+
+
+def test_exact_public_target_never_requests_a_listing():
+    class Unlisted(FakeHTTP):
+        def json(self, method, url, **kwargs):
+            assert "main_broad_list" not in url
+            return super().json(method, url, **kwargs)
+
+    session = bootstrap(Config("fixture_channel", "12345"), lambda _: None, http_factory=Unlisted)
+    assert session.bno == 12345 and session.ticket
+
+
+@pytest.mark.parametrize(
+    "changes,code",
+    [
+        ({"BJID": "different"}, "live_target_changed"),
+        ({"BNO": "12346"}, "live_target_changed"),
+        ({"RESULT": -1}, "metadata_denied_or_offline"),
+        ({"BPWD": "Y"}, "password_state_mismatch"),
+        ({"BPWD": None}, "password_state_unknown"),
+        ({"BPWD": "unconfirmed"}, "password_state_unknown"),
+        ({"SUBSCRIPTION_ONLY": "1"}, "public_policy"),
+        ({"PAID": "Y"}, "public_policy"),
+        ({"BNO": None}, "live_target_changed"),
+    ],
+)
+def test_public_metadata_fails_closed(changes, code):
+    class Metadata(FakeHTTP):
+        def json(self, method, url, **kwargs):
+            result = super().json(method, url, **kwargs)
+            if url == LIVE:
+                result["CHANNEL"].update(changes)
+            else:
+                pytest.fail("Watch must not be requested after invalid metadata")
+            return result
+
+    with pytest.raises(GridError, match=code):
+        bootstrap(Config("fixture_channel", "12345"), lambda _: None, http_factory=Metadata)
+
+
+@pytest.mark.parametrize("channel", [None, [], "invalid", {}])
+def test_invalid_channel_schema(channel):
+    class Bad(FakeHTTP):
+        def json(self, *args, **kwargs):
+            return {"CHANNEL": channel}
+
+    with pytest.raises(GridError):
+        bootstrap(Config("fixture_channel", "12345"), lambda _: None, http_factory=Bad)
+
+
+@pytest.mark.parametrize("update", [{"fan_ticket": ""}, {"broad_no": "999"}, {"bj_id": "other"}])
+def test_watch_must_issue_ticket_for_exact_target(update):
+    class Bad(FakeHTTP):
+        def json(self, method, url, **kwargs):
+            root = super().json(method, url, **kwargs)
+            if url != LIVE:
+                root["data"].update(update)
+            return root
+
+    with pytest.raises(GridError):
+        bootstrap(Config("fixture_channel", "12345"), lambda _: None, http_factory=Bad)
+
+
+def test_public_target_normalization():
+    session = bootstrap(Config("FIXTURE_CHANNEL", "0000012345"), lambda _: None, http_factory=FakeHTTP)
+    assert session.broadcaster == "fixture_channel" and session.bno == 12345
+
+
+@pytest.mark.parametrize("bno", [0, 12345, "0", "4294967296", "-1", "123/45"])
+def test_invalid_bno_rejected_before_http(bno):
+    def no_http():
+        pytest.fail("invalid target must not create an HTTP session")
+
+    with pytest.raises(GridError):
+        bootstrap(Config("fixture_channel", bno), lambda _: None, http_factory=no_http)

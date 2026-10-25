@@ -93,7 +93,16 @@ def receive(config, network, emit, report, stats):
         credentials = obtain_certificate(network, session, report)
         parents, node_key = discover_parent(network, session.center, credentials, report)
         sink = MediaSink(emit, config.capture_dir)
-        receive_media(network, parents, session.bno, node_key, sink, report, config.duration)
+        receive_media(
+            network,
+            parents,
+            session.bno,
+            node_key,
+            sink,
+            report,
+            config.duration,
+            rediscover=lambda: discover_parent(network, session.center, credentials, report),
+        )
         if not sink.mux.video_frames:
             raise GridError("no_playable_grid_video")
     finally:

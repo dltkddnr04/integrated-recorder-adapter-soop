@@ -29,6 +29,8 @@ def parse_media(body):
     if not 69 <= header <= 4096 or extension or size < 1 or header + size != len(body):
         raise GridError("media_layout_unconfirmed")
     kind = chr(body[40])
+    if kind not in ("I", "P", "B", "A"):
+        raise GridError("media_kind_unconfirmed")
     payload = body[header:]
     if kind in ("I", "P", "B") and (len(payload) < 4 or payload[:2] != b"\0\0"):
         raise GridError("video_prefix_unconfirmed")
@@ -206,7 +208,7 @@ class MediaSink:
         if name in self.files:
             self.files[name].write(data)
 
-    def add(self, frame):
+    def add(self, frame, discard=False):
         chunk = parse_media(frame.body)
         self.write("grid-wire.bin", frame.wire)
         self.write("grid-payload.bin", chunk.payload)
@@ -214,6 +216,8 @@ class MediaSink:
         self.stats["media_packets"] += 1
         self.stats["payload_bytes"] += len(chunk.payload)
         self.stats["wire_bytes"] += len(frame.wire)
+        if discard:
+            return chunk  # Preserve received raw bytes, but never replay duplicate ES/TS.
         if self.last_frame is not None and chunk.frame != self.last_frame + 1:
             self.stats["sequence_discontinuities"] += 1
         self.last_frame = chunk.frame

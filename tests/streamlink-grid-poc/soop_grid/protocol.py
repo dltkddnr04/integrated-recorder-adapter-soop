@@ -101,16 +101,28 @@ class Network:
 
     def __init__(self):
         self.stop = threading.Event()
+        self.deadline = None
         self._lock = threading.Lock()
         self._sockets = set()
 
+    def remaining(self, maximum):
+        if self.stop.is_set():
+            raise Cancelled("receiver_closed")
+        if self.deadline is None:
+            return maximum
+        remaining = min(maximum, self.deadline - time.monotonic())
+        if remaining <= 0:
+            raise GridError("capture_deadline_reached")
+        return remaining
+
     def connect(self, address):
         address = endpoint(*address)
+        timeout = self.remaining(3)
         with self._lock:
             if self.stop.is_set():
                 raise Cancelled("receiver_closed")
             sock = socket.socket(socket.AF_INET6 if ":" in address[0] else socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(3)
+            sock.settimeout(timeout)
             self._sockets.add(sock)
         try:
             sock.connect(address)
@@ -126,7 +138,7 @@ class Network:
         if self.stop.is_set():
             raise Cancelled("receiver_closed")
         try:
-            sock.settimeout(2)
+            sock.settimeout(self.remaining(2))
             sock.sendall(data)
         except OSError:
             raise GridError("network_write_failed") from None

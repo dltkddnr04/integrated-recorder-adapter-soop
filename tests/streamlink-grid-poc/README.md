@@ -18,7 +18,7 @@ Install the package before sideloading `plugins/soop.py`; the plugin imports the
 
 ## Public stream: file, stdout, or player
 
-Use a current stream you are allowed to watch and record. Replace `CHANNEL_ID` and `BNO` with the actual target. The anonymous path preserves the Go PoC's restriction to an exact password-free, non-subscription target on the first public live-list page.
+Use a current stream you are allowed to watch and record. Replace `CHANNEL_ID` and `BNO` with the actual target. The anonymous path validates the exact target directly with Live metadata and requires a normally issued Watch Ticket. No live-list page is required. Explicit restrictions and server denial fail closed; see [RELIABILITY.md](docs/RELIABILITY.md) for policy coverage and bounded Parent recovery.
 
 ```sh
 streamlink --plugin-dirs "$PWD/plugins" --stream-types grid \

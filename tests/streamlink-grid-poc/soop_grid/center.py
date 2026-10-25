@@ -101,7 +101,7 @@ def discover_parent(network, address, credentials, report):
         network.send(sock, center_packet(cmd, body))
 
     def receive():
-        f = read_frame(sock, "center", 3)
+        f = read_frame(sock, "center", network.remaining(3) if hasattr(network, "remaining") else 3)
         if f.result < 0:
             raise GridError("center_access_denied")
         return f

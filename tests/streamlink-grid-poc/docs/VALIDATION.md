@@ -49,3 +49,10 @@ A preceding `--output` capture also exited 0 and wrote 38,837,792 TS bytes; whol
 | HLS or Colony/WebRTC | Not part of this transport |
 
 Only the Python live result above establishes this port's capture success. Historical Go adult/password success is protocol provenance, not Python live evidence.
+
+## Reliability revision
+
+Before bundling: 129 modular tests passed (including Go Golden Vectors, local TCP
+failover, cancellation and full FFmpeg decode of generated recovered H.264/AAC TS).
+Synthetic tests do not imply SOOP live cache replay support.
+See [RELIABILITY.md](RELIABILITY.md) for verified scope and failure policies.

@@ -118,10 +118,11 @@ def test_duration_timeout_is_eof_only_at_the_configured_deadline(monkeypatch, at
         def release(self, *args):
             pass
 
-    clock = iter([0, 0, 0, 2 if at_deadline else 0])
-    monkeypatch.setattr(parent.time, "monotonic", lambda: next(clock))
+    clock = [0]
+    monkeypatch.setattr(parent.time, "monotonic", lambda: clock[0])
 
     def timeout(*args):
+        clock[0] = 2 if at_deadline else 0
         raise GridError("network_read_timeout")
 
     monkeypatch.setattr(parent, "read_frame", timeout)

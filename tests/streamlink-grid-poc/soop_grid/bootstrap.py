@@ -8,8 +8,6 @@ from dataclasses import dataclass, field
 from .auth import HTTP, LIVE, PLAY, identifier
 from .protocol import GridError, endpoint
 
-LISTING = "https://live.sooplive.com/api/main_broad_list_api.php?lang=ko_KR&orderType=view_cnt&pageNo=1&selectType=action"
-
 
 @dataclass(repr=False)
 class Config:
@@ -24,9 +22,15 @@ class Config:
 
     def validate(self):
         if not identifier(self.broadcaster) or (
-            self.bno is not None and not re.fullmatch(r"[0-9]{1,10}", self.bno)
+            self.bno is not None
+            and (not isinstance(self.bno, str) or not re.fullmatch(r"[0-9]{1,10}", self.bno))
         ):
             raise GridError("broadcast_target_invalid")
+        self.broadcaster = self.broadcaster.lower()
+        if self.bno is not None:
+            if not 0 < int(self.bno) <= 0xFFFFFFFF:
+                raise GridError("broadcast_number_bounds")
+            self.bno = str(int(self.bno))
         if not 1 <= self.duration <= 60:
             raise GridError("capture_duration_bounds")
         if (
@@ -80,25 +84,6 @@ def bootstrap(config, report, http_factory=HTTP):
             bno = match[1]
         if not 0 < int(bno) <= 0xFFFFFFFF:
             raise GridError("broadcast_number_bounds")
-        if not config.account:
-            listing = http.json("GET", LISTING)
-            candidates = listing.get("broad", [])
-            if not isinstance(candidates, list):
-                raise GridError("public_listing_invalid")
-            selected = next(
-                (
-                    x
-                    for x in candidates
-                    if x.get("user_id") == config.broadcaster and str(x.get("broad_no")) == bno
-                ),
-                None,
-            )
-            if (
-                not selected
-                or not affirmative_no(selected.get("is_password"))
-                or not affirmative_no(selected.get("subscription_only"))
-            ):
-                raise GridError("exact_target_not_public_listing_item")
         channel = http.json(
             "POST",
             LIVE,
@@ -113,20 +98,27 @@ def bootstrap(config, report, http_factory=HTTP):
                 "pwd": "",
             },
         ).get("CHANNEL", {})
-        if str(channel.get("RESULT")) != "1":
+        if not isinstance(channel, dict) or str(channel.get("RESULT")) != "1":
             raise GridError("live_metadata_denied_or_offline")
         if (
             str(channel.get("BNO")) != bno
             or str(channel.get("BJID", "")).lower() != config.broadcaster.lower()
         ):
             raise GridError("live_target_changed")
-        if channel.get("BPWD") is None:
+        if str(channel.get("BPWD")).upper() not in ("N", "Y", "0", "1", "FALSE", "TRUE"):
             raise GridError("password_state_unknown")
         protected = not affirmative_no(channel["BPWD"])
         if protected != bool(config.stream_password):
             raise GridError("stream_password_state_mismatch")
         if config.require_adult and str(channel.get("ACHK")) != "1":
             raise GridError("adult_check_unconfirmed")
+        if not config.account:
+            # Live has no verified equivalent of listing.subscription_only.
+            # Refuse explicit restrictions; exact-target Watch is authoritative
+            # for policies not exposed here. Never infer permission from absence.
+            for name in ("subscription_only", "SUBSCRIPTION_ONLY", "ISPAID", "PAID"):
+                if name in channel and not affirmative_no(channel[name]):
+                    raise GridError("public_policy_restricted_or_unknown")
         gate = endpoint(channel.get("GWIP"), channel.get("GWPT"))
         center = endpoint(channel.get("CTIP"), channel.get("CTPT"))
         if config.account:
@@ -146,6 +138,11 @@ def bootstrap(config, report, http_factory=HTTP):
             data = root.get("data", {})
             if str(root.get("result")) != "1":
                 raise GridError("public_watch_access_denied")
+            if not isinstance(data, dict):
+                raise GridError("public_watch_schema_invalid")
+            for name, expected in (("broad_no", bno), ("bj_id", config.broadcaster)):
+                if name in data and str(data[name]).lower() != expected.lower():
+                    raise GridError("watch_target_changed")
             ticket = data.get("fan_ticket")
             gate = endpoint(data.get("gateway_ip"), data.get("gateway_port"))
             center = endpoint(data.get("relay_ip"), data.get("relay_port"))
