@@ -243,7 +243,10 @@ def receive_media(
                         deadline is not None and time.monotonic() >= deadline
                     ):
                         raise GridError("capture_deadline_reached") from None
-                    if str(read_error) == "network_read_timeout" and time.monotonic() - last_media >= MEDIA_STALL_TIMEOUT:
+                    if (
+                        str(read_error) == "network_read_timeout"
+                        and time.monotonic() - last_media >= MEDIA_STALL_TIMEOUT
+                    ):
                         raise GridError("parent_media_stalled") from None
                     raise
                 stats["parent_packets"] = stats.get("parent_packets", 0) + 1
@@ -308,7 +311,9 @@ def receive_media(
                         raise
                     accepted = continuity.accept(chunk)
                     if continuity.recovering and not accepted and chunk.frame == continuity.last:
-                        overlap_started = cache_request_at if cache_request_at is not None else time.monotonic()
+                        overlap_started = (
+                            cache_request_at if cache_request_at is not None else time.monotonic()
+                        )
                         stats["overlap_verification_ms"] = round(
                             (time.monotonic() - overlap_started) * 1000, 3
                         )
@@ -330,12 +335,16 @@ def receive_media(
                             stats["cache_frames_replayed"] += 1
                             if stats.get("first_new_frame_ms") is None:
                                 recovery_origin = (
-                                    recovery_started_at if recovery_started_at is not None else time.monotonic()
+                                    recovery_started_at
+                                    if recovery_started_at is not None
+                                    else time.monotonic()
                                 )
                                 elapsed = (time.monotonic() - recovery_origin) * 1000
                                 stats["first_new_frame_ms"] = round(elapsed, 3)
                             if recovery_started_at is not None:
-                                stats["total_recovery_ms"] = round((time.monotonic() - recovery_started_at) * 1000, 3)
+                                stats["total_recovery_ms"] = round(
+                                    (time.monotonic() - recovery_started_at) * 1000, 3
+                                )
                             stats["recovery_success"] += 1
                             report("first_new_frame_accepted")
                             report("recovery_completed")

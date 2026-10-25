@@ -78,7 +78,7 @@ def test_auto_never_splices_hls_after_grid_output_and_read_failure():
 def test_hls_mode_delegates_to_official_plugin_and_auto_is_lazy(monkeypatch):
     session = Streamlink()
     session.plugins.load_path(str(Path(__file__).resolve().parents[1] / "plugins"))
-    plugin_class = session.plugins.get_loaded()["soopgrid"]
+    plugin_class = session.plugins.get_loaded()["soop_grid"]
     module = sys.modules[plugin_class.__module__]
     calls = []
 

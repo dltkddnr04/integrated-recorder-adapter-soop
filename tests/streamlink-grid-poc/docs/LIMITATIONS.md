@@ -4,8 +4,11 @@
 - Multi-Parent active-active and cross-parent aggregation are not implemented; live
   concurrency, node-key scope, and shared frame sequence are unverified.
 - Single-Parent failover and exact-overlap cache recovery passed synthetic/loopback
-  tests, but live SOOP Parent failover and server cache overlap are not verified.
-  Missing overlap or any unprovable gap ends the current output with an error.
+  tests and a controlled live test that closed the client-owned Parent socket three
+  times. The receiver reconnected through Center rediscovery and verified each
+  server Cache overlap. Natural remote Parent failures and independent failure-domain
+  transitions remain unverified. Missing overlap or any unprovable gap ends the
+  current output with an error.
 - Continuous-duration capture is implemented with bounded queues, but multi-hour
   live durability, session reauthentication, crash resume, and broadcast rollover
   are not verified. No automatic certificate refresh is performed.

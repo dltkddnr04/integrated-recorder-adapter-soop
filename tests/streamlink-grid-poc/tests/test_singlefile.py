@@ -77,7 +77,7 @@ def test_bundle_identity_dataclasses_and_golden_packets(bundle, golden):
 def test_singlefile_plugin_coexists_with_builtin_without_package_install(tmp_path):
     plugin_dir = tmp_path / "plugins"
     plugin_dir.mkdir()
-    (plugin_dir / "soopgrid.py").write_bytes((ROOT / "dist" / "soop.py").read_bytes())
+    (plugin_dir / "soop_grid.py").write_bytes((ROOT / "dist" / "soop.py").read_bytes())
     python = os.environ.get("SOOP_GRID_CLEAN_PYTHON", sys.executable)
     env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
     base = [python, "-m", "streamlink_cli", "--plugin-dir", str(plugin_dir)]
@@ -87,6 +87,17 @@ def test_singlefile_plugin_coexists_with_builtin_without_package_install(tmp_pat
     )
     assert result.returncode == 0
     result = subprocess.run(
+        base + ["--json", target],
+        env=env,
+        cwd=tmp_path,
+        capture_output=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+    data = json.loads(result.stdout)
+    assert data["plugin"] == "soop_grid"
+    assert data["streams"]["original"]["type"] == "auto"
+    result = subprocess.run(
         base + ["--json", "--soop-grid-transport", "grid", "--soop-grid-duration", "3600", target],
         env=env,
         cwd=tmp_path,
@@ -95,7 +106,7 @@ def test_singlefile_plugin_coexists_with_builtin_without_package_install(tmp_pat
     )
     assert result.returncode == 0, result.stderr
     data = json.loads(result.stdout)
-    assert data["plugin"] == "soopgrid"
+    assert data["plugin"] == "soop_grid"
     assert data["streams"]["original"]["type"] == "grid"
     if "SOOP_GRID_CLEAN_PYTHON" in os.environ:
         probe = subprocess.run(
@@ -110,7 +121,10 @@ def test_singlefile_plugin_coexists_with_builtin_without_package_install(tmp_pat
     session = Streamlink()
     session.plugins.load_path(str(plugin_dir))
     _, cls, url = session.resolve_url(target)
-    assert cls.__module__.endswith("soopgrid")
+    assert cls.__module__.endswith("soop_grid")
+    session.plugins.load_builtin()
+    assert session.plugins.get_loaded()["soop"].__name__ == "Soop"
+    assert session.plugins.get_loaded()["soop_grid"] is cls
     assert cls.__name__ == "_sg_plugin_SoopGridPlugin"
     assert cls(session, url).streams()["original"].grid.config.bno == "12345"
 
@@ -161,7 +175,7 @@ def factory(VALUE):
 def comp():
     return [VALUE for VALUE in range(3)], VALUE
 """)
-    (tmp_path / "plugins" / "soopgrid.py").write_text("""from soop_grid.base import Item, factory, comp
+    (tmp_path / "plugins" / "soop_grid.py").write_text("""from soop_grid.base import Item, factory, comp
 
 def lazy():
     from soop_grid.base import VALUE
@@ -173,3 +187,40 @@ __plugin__ = (Item(3).value, factory(5)(), comp(), lazy())
     path.write_text(builder.build())
     linked = load(path, "scope_fixture")
     assert linked.__plugin__ == (3, 5, ([0, 1, 2], 7), 7)
+
+
+def test_old_and_new_install_names_both_match_and_require_manual_migration(tmp_path):
+    plugin_dir = tmp_path / "plugins"
+    plugin_dir.mkdir()
+    artifact = (ROOT / "dist" / "soop.py").read_bytes()
+    (plugin_dir / "soopgrid.py").write_bytes(artifact)
+    (plugin_dir / "soop_grid.py").write_bytes(artifact)
+
+    session = Streamlink()
+    session.plugins.load_path(str(plugin_dir))
+    loaded = session.plugins.get_loaded()
+    assert {"soopgrid", "soop_grid"} <= loaded.keys()
+
+    url = "https://play.sooplive.com/fixture_channel/12345"
+    matching_ids = {
+        plugin_id
+        for plugin_id in ("soopgrid", "soop_grid")
+        if any(matcher.pattern.match(url) for matcher in loaded[plugin_id].matchers)
+    }
+    assert matching_ids == {"soopgrid", "soop_grid"}
+    assert session.resolve_url(url)[0] in matching_ids
+
+
+def test_old_new_plugin_collision_selection_follows_load_order(tmp_path):
+    artifact = (ROOT / "dist" / "soop.py").read_bytes()
+    url = "https://play.sooplive.com/fixture_channel/12345"
+    observed = []
+    for index, names in enumerate((("soopgrid.py", "soop_grid.py"), ("soop_grid.py", "soopgrid.py"))):
+        session = Streamlink()
+        for position, filename in enumerate(names):
+            directory = tmp_path / str(index) / str(position)
+            directory.mkdir(parents=True)
+            (directory / filename).write_bytes(artifact)
+            session.plugins.load_path(str(directory))
+        observed.append(session.resolve_url(url)[0])
+    assert observed == ["soopgrid", "soop_grid"]

@@ -101,8 +101,18 @@ def probe(config, seconds=20, close_first_after=None):
         deadline = started + seconds
         network.deadline = deadline
         results = [
-            dict(connected=False, media_packets=0, payload_bytes=0, wire_bytes=0, sent_wire_bytes=0,
-                 first_media_seconds=None, last_media_seconds=None, sequence_gaps=0, error=None, frames={})
+            dict(
+                connected=False,
+                media_packets=0,
+                payload_bytes=0,
+                wire_bytes=0,
+                sent_wire_bytes=0,
+                first_media_seconds=None,
+                last_media_seconds=None,
+                sequence_gaps=0,
+                error=None,
+                frames={},
+            )
             for _ in range(2)
         ]
         sockets = [None, None]
@@ -230,7 +240,9 @@ def probe(config, seconds=20, close_first_after=None):
             "distinct_endpoints": len({p.address for p in unique}),
             "distinct_same_quality_endpoints": len({p.address for p in unique if p.quality == first.quality}),
             "same_endpoint_two_connections": first.address == second.address,
-            "connection_topology": "SAME_ENDPOINT_TWO_CONNECTIONS" if first.address == second.address else "DISTINCT_PARENT_ENDPOINTS",
+            "connection_topology": "SAME_ENDPOINT_TWO_CONNECTIONS"
+            if first.address == second.address
+            else "DISTINCT_PARENT_ENDPOINTS",
             "center_session_shared": True,
             "node_key_generation_shared": True,
             "quality_identical": first.quality == second.quality,

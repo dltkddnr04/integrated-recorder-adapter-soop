@@ -189,7 +189,7 @@ class Linker(ast.NodeTransformer):
 
 def build():
     paths = {p.stem: p for p in sorted((ROOT / "soop_grid").glob("*.py")) if p.stem != "__init__"}
-    paths["plugin"] = ROOT / "plugins" / "soopgrid.py"
+    paths["plugin"] = ROOT / "plugins" / "soop_grid.py"
     sources = {name: p.read_text() for name, p in paths.items()}
     trees = {name: ast.parse(source) for name, source in sources.items()}
     tables = {name: symtable.symtable(source, str(paths[name]), "exec") for name, source in sources.items()}

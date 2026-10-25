@@ -1,5 +1,10 @@
 # Python validation
 
+This report preserves evidence from several historical revisions. The current
+user-installed filename and external ID are `soop_grid.py` / `soop_grid`;
+`dist/soop.py` remains the generated artifact. Historical packaging descriptions
+below refer to the revision under test at that time, not current installation steps.
+
 Validation date: 2026-10-25 UTC. Host: isolated development checkout on Ubuntu x86-64, Python 3.12.3, official Streamlink 8.6.2, PyCryptodome 3.24.1. Go reference: commit `3518f21c8feeb7b046562945ade6702e2803b450`. FFmpeg/FFprobe 9.0 were used only after capture, outside the receiver.
 
 ## Actual public Native Grid capture
@@ -71,7 +76,7 @@ This does not supersede previous captures' own measurements or imply live failov
 
 The later source revision adds supported-subset H.264 DTS/PTS reconstruction,
 continuous default capture with optional time/byte bounds, exact-overlap single-Parent
-failover, and built-in HLS delegation through a distinct `soopgrid` plugin ID. The
+failover, and built-in HLS delegation through a distinct external plugin ID. The
 previous live capture above used the earlier PTS-only revision; it is historical
 evidence and was not captured again with this revision.
 
@@ -84,16 +89,29 @@ historical private input, not a new live capture. The Grid timestamp-to-clock mo
 is supported by this sample and synthetic fixtures; broad source compatibility and
 perceptual A/V sync are not established.
 
-Current offline suite: 159 tests pass when the isolated loopback socket tests are
+Current offline suite at that historical revision: 159 tests pass when the isolated loopback socket tests are
 allowed. In the default sandbox those local sockets are denied with EPERM; the same
 subset passes when run with local socket permission. A clean virtual environment with
 Streamlink 8.6.2 only (plus its own dependencies), no project package, no PYTHONPATH,
-and a copied `dist/soop.py` installed as `soopgrid.py` passes plugin discovery and
-JSON stream enumeration. The bundle is reproducible and source/bundle regression
-tests pass. Current Linux live tests were not run for this revision.
+and a copied `dist/soop.py` installed under the then-current external-plugin
+filename passes plugin discovery and JSON stream enumeration. The bundle is
+reproducible and source/bundle regression tests pass. Linux live tests were not run
+for that revision.
 
 Current status: HLS delegation is verified with an offline mocked official plugin,
 but fresh network HLS behavior is not revalidated. Parent failover/cache overlap is
 synthetic and local-loopback verified only. Simultaneous multi-Parent reception,
 30-minute/3-hour/6-hour recording, automatic reauthentication, and Windows/macOS
 runtime loading are not verified. See [PRODUCTION_READINESS_RESULT.md](PRODUCTION_READINESS_RESULT.md).
+
+## Subsequent controlled-live recovery validation
+
+The later [LIVE_FAILOVER_VALIDATION.md](LIVE_FAILOVER_VALIDATION.md) records a
+150-second actual-public-broadcast run with three sequential client-owned Parent TCP
+closes. Each recovery performed Center rediscovery, used a new Node Key, reconnected
+to a different observed endpoint identity, verified one exact server Cache-overlap
+frame, discarded the duplicate, and accepted subsequent frames. The output reported
+no gaps, duplicate output, or identity conflicts; the final TS passed full H.264/AAC
+decode and timing/continuity checks. This is controlled client-side failure injection,
+not a natural remote Parent failure or proof of independent physical failure domains.
+It does not establish multi-hour endurance.

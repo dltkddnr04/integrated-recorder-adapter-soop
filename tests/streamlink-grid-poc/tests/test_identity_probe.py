@@ -191,17 +191,35 @@ def test_cache_request_probe_counts_wire_and_never_starts_live_push(monkeypatch)
             sock.sendall(parent_packet(0xC747))
             observed["request"] = read_frame(sock, "parent")
             requested = int.from_bytes(observed["request"].body[4:12], "little")
-            sock.sendall(b"".join(parent_packet(
-                0xC748, media_body(synthetic_sps(), frame=requested+i,
-                                   timestamp=50_000_000 + (requested+i)*166667)
-            ) for i in range(3)))
+            sock.sendall(
+                b"".join(
+                    parent_packet(
+                        0xC748,
+                        media_body(
+                            synthetic_sps(),
+                            frame=requested + i,
+                            timestamp=50_000_000 + (requested + i) * 166667,
+                        ),
+                    )
+                    for i in range(3)
+                )
+            )
             sock.sendall(parent_packet(0xC747))
             observed["request2"] = read_frame(sock, "parent")
             requested2 = int.from_bytes(observed["request2"].body[4:12], "little")
-            sock.sendall(b"".join(parent_packet(
-                0xC748, media_body(synthetic_sps(), frame=requested2+i,
-                                   timestamp=50_000_000 + (requested2+i)*166667)
-            ) for i in range(2)))
+            sock.sendall(
+                b"".join(
+                    parent_packet(
+                        0xC748,
+                        media_body(
+                            synthetic_sps(),
+                            frame=requested2 + i,
+                            timestamp=50_000_000 + (requested2 + i) * 166667,
+                        ),
+                    )
+                    for i in range(2)
+                )
+            )
             time.sleep(0.3)
 
     worker = threading.Thread(target=serve)

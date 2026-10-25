@@ -20,7 +20,7 @@ from soop_grid.protocol import GridError
 from soop_grid.stream import OfficialHLSFallback, SoopAutoStream, SoopGridStream
 
 
-log = logging.getLogger("streamlink.plugins.soopgrid")
+log = logging.getLogger("streamlink.plugins.soop_grid")
 
 
 def official_hls_streams(session, url, account, password, stream_password):

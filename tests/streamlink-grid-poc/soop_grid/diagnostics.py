@@ -13,7 +13,7 @@ import time
 
 from .protocol import Cancelled, GridError
 
-_log = logging.getLogger("streamlink.plugins.soopgrid")
+_log = logging.getLogger("streamlink.plugins.soop_grid")
 
 EVENTS = frozenset(
     [

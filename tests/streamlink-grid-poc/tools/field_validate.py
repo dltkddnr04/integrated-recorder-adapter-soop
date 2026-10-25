@@ -68,7 +68,9 @@ def last_heartbeat(path):
 def oom_counters():
     try:
         lines = Path("/sys/fs/cgroup/memory.events").read_text().splitlines()
-        return {key: int(value) for key, value in (line.split() for line in lines) if key in ("oom", "oom_kill")}
+        return {
+            key: int(value) for key, value in (line.split() for line in lines) if key in ("oom", "oom_kill")
+        }
     except (OSError, ValueError):
         return {}
 
@@ -198,7 +200,7 @@ def supervise(command, directory, timeout, env=None):
         }
         oom_after = oom_counters()
         if oom_before and oom_after:
-            result["visible_cgroup_oom_counter_delta"] = {k: oom_after[k]-oom_before[k] for k in oom_before}
+            result["visible_cgroup_oom_counter_delta"] = {k: oom_after[k] - oom_before[k] for k in oom_before}
             result["oom_counter_scope"] = "visible_root_cgroup_not_process_specific"
         output = directory / "recording.ts"
         if output.exists():
@@ -287,7 +289,7 @@ def main():
         str(args.directory / "recording.ts"),
     ]
     result = supervise(command, args.directory, args.duration + 120, env)
-    artifact = Path(args.plugin_dir) / "soopgrid.py"
+    artifact = Path(args.plugin_dir) / "soop_grid.py"
     result.update(
         configured_duration=args.duration,
         configured_max_wire_bytes=args.max_bytes,

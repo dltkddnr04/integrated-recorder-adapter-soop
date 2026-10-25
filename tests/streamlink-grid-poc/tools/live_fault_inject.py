@@ -149,7 +149,9 @@ class FaultSink:
                 self.records.append(item)
                 self.current = item
                 self.accepted_since_recovery = 0
-                self.report("fault_injected_local_close", extra={"injection_number": item["injection_number"]})
+                self.report(
+                    "fault_injected_local_close", extra={"injection_number": item["injection_number"]}
+                )
         return result
 
     def close(self):
@@ -189,8 +191,7 @@ class FaultSink:
             item["recovery_result"] = "SUCCESS"
             item["recovery_duration_ms"] = self.stats.get("total_recovery_ms")
             item["cache_duplicate_discard_count"] = (
-                int(self.stats.get("overlap_duplicates_discarded", 0))
-                - item["duplicate_frames_before"]
+                int(self.stats.get("overlap_duplicates_discarded", 0)) - item["duplicate_frames_before"]
             )
             item["missing_frame_count"] = int(self.stats.get("missing_frames", 0))
             item["identity_conflict_count"] = int(self.stats.get("frame_identity_conflicts", 0))
@@ -214,7 +215,9 @@ class FaultSink:
         for item in self.records:
             if self.current is item:
                 item["recovery_result"] = "FAILED"
-                item["recovery_failure_code"] = self.stats.get("recovery_failure_code") or "not_recovered_before_stop"
+                item["recovery_failure_code"] = (
+                    self.stats.get("recovery_failure_code") or "not_recovered_before_stop"
+                )
                 item["missing_frame_count"] = int(self.stats.get("missing_frames", 0))
                 item["identity_conflict_count"] = int(self.stats.get("frame_identity_conflicts", 0))
         return self.records
@@ -288,7 +291,11 @@ def main():
             max_bytes=args.max_wire_bytes,
             capture_dir=str(run_dir / "capture"),
         )
-        network = ParentOnlyFaultNetwork(lambda name, **fields: event_writer({"elapsed_ms": round((time.monotonic() - started) * 1000, 3), "event": name, **fields}))
+        network = ParentOnlyFaultNetwork(
+            lambda name, **fields: event_writer(
+                {"elapsed_ms": round((time.monotonic() - started) * 1000, 3), "event": name, **fields}
+            )
+        )
         diagnostics = Diagnostics(run_dir / "receiver", lambda: stats)
         diagnostics.start()
         report("receiver_started")
@@ -346,11 +353,26 @@ def main():
     result["stats"] = {
         name: stats.get(name)
         for name in (
-            "parent_connections", "parent_connection_attempts", "rediscoveries", "failover_successes",
-            "recovery_success", "recovery_failures", "last_normal_frame", "media_packets", "wire_bytes",
-            "payload_bytes", "video_frames", "audio_frames", "duplicate_frames_excluded",
-            "overlap_duplicates_discarded", "missing_frames", "frame_identity_conflicts",
-            "unrecoverable_ranges", "sequence_discontinuities", "stop_reason", "recovery_failure_code",
+            "parent_connections",
+            "parent_connection_attempts",
+            "rediscoveries",
+            "failover_successes",
+            "recovery_success",
+            "recovery_failures",
+            "last_normal_frame",
+            "media_packets",
+            "wire_bytes",
+            "payload_bytes",
+            "video_frames",
+            "audio_frames",
+            "duplicate_frames_excluded",
+            "overlap_duplicates_discarded",
+            "missing_frames",
+            "frame_identity_conflicts",
+            "unrecoverable_ranges",
+            "sequence_discontinuities",
+            "stop_reason",
+            "recovery_failure_code",
         )
         if name in stats
     }
@@ -370,17 +392,22 @@ def main():
     }
     result["elapsed_seconds"] = round(time.monotonic() - started, 3)
     result["receiver_process_exit_code"] = 0 if result["receiver_returned_normally"] else 1
-    result["all_requested_recoveries_succeeded"] = (
-        len(result["injections"]) == args.faults
-        and all(item.get("recovery_result") == "SUCCESS" for item in result["injections"])
+    result["all_requested_recoveries_succeeded"] = len(result["injections"]) == args.faults and all(
+        item.get("recovery_result") == "SUCCESS" for item in result["injections"]
     )
-    result["cache_overlap_identities_exact"] = all(
-        item.get("overlap_identity_exact") is True for item in result["injections"]
-    ) if result["injections"] else False
-    result["all_recoveries_gap_free"] = all(
-        item.get("missing_frame_count") == 0 and item.get("identity_conflict_count") == 0
-        for item in result["injections"]
-    ) if result["injections"] else False
+    result["cache_overlap_identities_exact"] = (
+        all(item.get("overlap_identity_exact") is True for item in result["injections"])
+        if result["injections"]
+        else False
+    )
+    result["all_recoveries_gap_free"] = (
+        all(
+            item.get("missing_frame_count") == 0 and item.get("identity_conflict_count") == 0
+            for item in result["injections"]
+        )
+        if result["injections"]
+        else False
+    )
     result["duration_limit_exit_0"] = (
         result["receiver_returned_normally"] and stats.get("stop_reason") == "duration_limit"
     )
@@ -393,7 +420,14 @@ def main():
         summary.flush()
         os.fsync(summary.fileno())
     print(json.dumps({key: value for key, value in result.items() if key != "capture_analysis"}, indent=2))
-    return 0 if result["all_requested_recoveries_succeeded"] and result["duration_limit_exit_0"] and result["all_recoveries_gap_free"] and result["cache_overlap_identities_exact"] else 1
+    return (
+        0
+        if result["all_requested_recoveries_succeeded"]
+        and result["duration_limit_exit_0"]
+        and result["all_recoveries_gap_free"]
+        and result["cache_overlap_identities_exact"]
+        else 1
+    )
 
 
 if __name__ == "__main__":

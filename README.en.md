@@ -56,11 +56,11 @@ GOWORK=off go build -o integrated-recorder-adapter-soop ./cmd/integrated-recorde
 
 This repository uses the [Adapter SDK for Go](https://github.com/integrated-recorder/adapter-sdk-go). See the [Plugin Registry](https://github.com/integrated-recorder/plugin-registry) for distribution status and releases. There is no stable official Registry distribution at this time.
 
-## Experimental Native Grid PoC
+## Experimental/Beta Streamlink Native Grid plugin
 
 The independent Go Grid receiver research and synthetic fixture tests are in [tests/grid-poc](tests/grid-poc/README.md). This experimental code is separate from the Adapter Protocol v1 plugin and is not integrated into the production adapter.
 
-The Python port and external Streamlink plugin PoC are in [tests/streamlink-grid-poc](tests/streamlink-grid-poc/README.md).
+The separate Python Streamlink Native Grid plugin has passed bounded live reception and controlled Parent-failure recovery tests; it remains Experimental/Beta. See the [Korean quick start](tests/streamlink-grid-poc/README.md) and [English README](tests/streamlink-grid-poc/README.en.md) for installation and use. It is not integrated into the Go Adapter or Core.
 
 ## Ecosystem and license
 

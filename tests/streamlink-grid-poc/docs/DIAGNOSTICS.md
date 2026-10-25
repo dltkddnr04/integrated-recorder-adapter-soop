@@ -29,6 +29,12 @@ There is no per-frame diagnostic fsync. Sudden process death or storage failure 
 prevent the final summary, so absence of a summary is not evidence of normal EOF.
 The heartbeat thread is stopped and joined on close.
 
+The receiver currently emits `parent_last_media_received` for every media packet;
+when diagnostics are enabled this creates and flushes one JSONL record per packet in
+addition to the two-second heartbeat. Diagnostic disk usage and synchronous write
+overhead therefore grow with packet count. For long captures, leave diagnostics
+disabled unless that detailed event stream is needed, and monitor available disk space.
+
 Worker errors are retained while existing output bytes drain. Once the buffer is
 empty the reader raises `OSError`, as Streamlink 8.6.2's output runner requires.
 Startup still uses `StreamError`. A cleanup exception does not replace a prior
@@ -44,7 +50,7 @@ have not been established; they are not inferred from a disconnected socket.
 
 Use a development installation for these tools, plus a separate clean environment
 containing official Streamlink 8.6.2 only. Copy `dist/soop.py` to a temporary plugin
-directory as `soopgrid.py`:
+directory as `soop_grid.py`:
 
 ```sh
 python tools/field_validate.py \

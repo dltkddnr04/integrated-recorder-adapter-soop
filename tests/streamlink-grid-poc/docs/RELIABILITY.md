@@ -13,7 +13,7 @@ switch, ticket synthesis, or access-control bypass is performed.
 ## Single active Parent and failover
 
 The receiver keeps the Center-provided candidates and connects to one at a time.
-Connect/read/write failure, EOF/reset, read timeout, or six seconds without media
+Connect/read/write failure, EOF/reset, read timeout, or three seconds without media
 is treated as transient. Explicit negative replies, malformed framing, changed
 quality, conflicting frame identity, and unprovable continuity are terminal.
 
@@ -38,8 +38,8 @@ timestamp must not regress. Raw received bytes retain duplicates in arrival orde
 while duplicates are excluded from H.264/AAC and TS output. The single muxer and
 clock origin survive proven overlap.
 
-Cache availability and overlap behavior are only verified with synthetic and local
-loopback peers, not against a live SOOP Parent failure. If the overlap is absent,
+Cache overlap was verified in a controlled live test that closed the client-owned
+Parent socket; this does not simulate a remote Parent's natural failure. If the overlap is absent,
 cache ends, numbering resets, quality changes, timestamp regresses, or identity
 conflicts, the receiver reports the gap and stops. It does not invent frames or
 restart at an unverified IDR boundary. The resulting partial file is not described

@@ -30,7 +30,9 @@ def run_trial(network, session, node_key, parent, offset, seconds, repeat_once=F
     sock = network.connect(parent.address)
     trial = {
         "offset_from_center_frame_plus_one": offset,
-        "start_frame_source": "center_entry_plus_offset" if absolute_start is None else "previous_trial_observed_frame_plus_offset",
+        "start_frame_source": "center_entry_plus_offset"
+        if absolute_start is None
+        else "previous_trial_observed_frame_plus_offset",
         "connected": True,
         "requests_sent": [],
         "received_command_counts": {},
@@ -67,7 +69,10 @@ def run_trial(network, session, node_key, parent, offset, seconds, repeat_once=F
         while not network.stop.is_set() and time.monotonic() < deadline:
             frame = read_frame(sock, "parent", min(2.0, max(0.001, deadline - time.monotonic())))
             trial["received_application_wire_bytes"] += len(frame.wire)
-            if trial["received_application_wire_bytes"] + trial["sent_application_wire_bytes"] > MAX_TRIAL_WIRE:
+            if (
+                trial["received_application_wire_bytes"] + trial["sent_application_wire_bytes"]
+                > MAX_TRIAL_WIRE
+            ):
                 trial["stop_code"] = "application_wire_budget"
                 break
             if frame.result < 0:
@@ -92,11 +97,13 @@ def run_trial(network, session, node_key, parent, offset, seconds, repeat_once=F
                     trial["stop_code"] = "cache_header_after_request_budget"
                     break
                 cache_requests += 1
-                trial["requests_sent"].append({
-                    "command": "0xCB30",
-                    "start_frame": start,
-                    "opaque_final_word": connect_status,
-                })
+                trial["requests_sent"].append(
+                    {
+                        "command": "0xCB30",
+                        "start_frame": start,
+                        "opaque_final_word": connect_status,
+                    }
+                )
                 send(0xCB30, struct.pack("<IQI", parent.quality, start, connect_status))
                 request_sent_monotonic = time.monotonic()
             elif frame.command == 0xC742:
@@ -113,7 +120,9 @@ def run_trial(network, session, node_key, parent, offset, seconds, repeat_once=F
                 if trial["first_frame"] is None:
                     trial["first_frame"] = chunk.frame
                     if request_sent_monotonic is not None:
-                        trial["first_media_after_request_seconds"] = round(time.monotonic() - request_sent_monotonic, 6)
+                        trial["first_media_after_request_seconds"] = round(
+                            time.monotonic() - request_sent_monotonic, 6
+                        )
                 if last_frame is not None and chunk.frame != last_frame + 1:
                     trial["frame_gaps"] += 1
                 if chunk.frame < requested_start:
@@ -128,11 +137,22 @@ def run_trial(network, session, node_key, parent, offset, seconds, repeat_once=F
         if trial["stop_code"] is None:
             trial["stop_code"] = "time_budget"
     except GridError as exc:
-        trial["stop_code"] = str(exc) if str(exc) in {
-            "parent_access_denied", "peer_closed_or_truncated", "network_read_failed",
-            "network_read_timeout", "parent_header_invalid", "media_layout_unconfirmed",
-            "media_kind_unconfirmed", "media_timestamp_bounds", "capture_deadline_reached",
-        } else "probe_protocol_error"
+        trial["stop_code"] = (
+            str(exc)
+            if str(exc)
+            in {
+                "parent_access_denied",
+                "peer_closed_or_truncated",
+                "network_read_failed",
+                "network_read_timeout",
+                "parent_header_invalid",
+                "media_layout_unconfirmed",
+                "media_kind_unconfirmed",
+                "media_timestamp_bounds",
+                "capture_deadline_reached",
+            }
+            else "probe_protocol_error"
+        )
     finally:
         trial["elapsed_seconds"] = round(time.monotonic() - started, 3)
         network.release(sock)
@@ -140,7 +160,12 @@ def run_trial(network, session, node_key, parent, offset, seconds, repeat_once=F
 
 
 def run(config, offsets=(0, 5), seconds=8, repeat_once=False):
-    if not 1 <= seconds <= MAX_TRIAL_SECONDS or len(offsets) != 2 or offsets[0] != 0 or not 1 <= offsets[1] <= 32:
+    if (
+        not 1 <= seconds <= MAX_TRIAL_SECONDS
+        or len(offsets) != 2
+        or offsets[0] != 0
+        or not 1 <= offsets[1] <= 32
+    ):
         raise ValueError("invalid bounded cache experiment parameters")
     stages = []
     session = bootstrap(config, stages.append)
@@ -151,7 +176,10 @@ def run(config, offsets=(0, 5), seconds=8, repeat_once=False):
         parents, node_key = discover_parent(network, session.center, credentials, stages.append)
         unique = []
         for candidate in parents:
-            if not any(candidate.address == existing.address and candidate.quality == existing.quality for existing in unique):
+            if not any(
+                candidate.address == existing.address and candidate.quality == existing.quality
+                for existing in unique
+            ):
                 unique.append(candidate)
         if not unique:
             raise GridError("no_usable_server_parent")
@@ -168,8 +196,14 @@ def run(config, offsets=(0, 5), seconds=8, repeat_once=False):
             # observed frame rather than a stale historical range.
             trial_seconds = min(2, seconds) if index == 0 else seconds
             trial, hashes = run_trial(
-                network, session, node_key, parent, offset, trial_seconds,
-                repeat_once if index == 0 else False, start,
+                network,
+                session,
+                node_key,
+                parent,
+                offset,
+                trial_seconds,
+                repeat_once if index == 0 else False,
+                start,
             )
             trials.append(trial)
             private_hashes.append(hashes)

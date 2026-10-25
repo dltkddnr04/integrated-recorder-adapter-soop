@@ -310,7 +310,7 @@ def _sg_crypto_service6(guid, timestamp, counter):
     return _sg_crypto_wire_hash(_sg_crypto_pad16(second)) + _sg_crypto_ctr(_sg_crypto_SERVICE_KEY, _sg_crypto_SERVICE_IV, second)
 
 
-# Module: diagnostics; source SHA-256: ef677557cfaa0f13e81f7696279288e9b9ce4a3f8c1cff0bc95c0272579dd3b5
+# Module: diagnostics; source SHA-256: 7dd4f4fdd1b953041ab67adda56df3ffddec72b5fa90391b3a4f70320a1fdf01
 import errno as _sg_diagnostics_errno
 import json as _sg_diagnostics_json
 import logging as _sg_diagnostics_logging
@@ -321,7 +321,7 @@ import threading as _sg_diagnostics_threading
 import time as _sg_diagnostics_time
 _sg_diagnostics_Cancelled = _sg_protocol_Cancelled
 _sg_diagnostics_GridError = _sg_protocol_GridError
-_sg_diagnostics__log = _sg_diagnostics_logging.getLogger('streamlink.plugins.soopgrid')
+_sg_diagnostics__log = _sg_diagnostics_logging.getLogger('streamlink.plugins.soop_grid')
 _sg_diagnostics_EVENTS = frozenset(['account_session_confirmed', 'center_join_accepted', 'center_rediscovery_failed', 'center_rediscovery_completed', 'cleanup_failed_after_primary_error', 'gateway_certificate_received', 'gateway_login_accepted', 'grid_duration_limit_reached', 'grid_frame_gap_detected', 'grid_frame_gap_recovered', 'grid_frame_gap_unrecoverable', 'grid_live_resumed', 'live_push_transition_requested', 'grid_media_byte_limit_reached', 'heartbeat', 'media_packet_rejected', 'native_tk_ftk_metadata_received', 'new_node_key_obtained', 'parent_c748_media_received', 'parent_candidate_failed', 'parent_candidate_selected', 'parent_connected', 'parent_connection_lost', 'parent_failure_detected', 'parent_handshake_completed', 'parent_last_media_received', 'parent_tcp_connect_started', 'parent_tcp_connected', 'parent_discovery_received', 'parent_failover_exhausted', 'parent_failover_started', 'parent_failover_succeeded', 'parent_rediscovery_started', 'recovery_completed', 'recovery_started', 'recovery_failed', 'cache_request_sent', 'cache_first_media_received', 'overlap_frame_verified', 'first_new_frame_accepted', 'public_watch_ticket_received', 'reader_closed', 'reader_eof', 'reader_error', 'receiver_started', 'unknown_event', 'worker_finished'])
 _sg_diagnostics_NUMERIC_FIELDS = frozenset('\nmedia_packets payload_bytes wire_bytes parent_wire_bytes video_frames audio_frames sequence_discontinuities\nparent_connections failover_attempts failover_successes rediscoveries duplicate_frames_excluded\ngap_events recovered_ranges unrecoverable_ranges parent_connection_attempts parent_packets\nlast_normal_frame last_video_dts_90k last_video_pts_90k active_parents last_control_command\ncache_request_count last_cache_request_start last_media_monotonic\nfailure_detection_ms candidate_selection_ms center_rediscovery_ms parent_tcp_connect_ms\nparent_handshake_ms cache_first_byte_ms overlap_verification_ms first_new_frame_ms\ntotal_recovery_ms cache_frames_received cache_frames_replayed overlap_duplicates_discarded\nmissing_frames frame_identity_conflicts recovery_wire_bytes recovery_media_bytes\nrecovery_success recovery_failures recovery_failure_attempts catchup_duration_ms catchup_throughput_bytes_per_sec\nfailover_backoff_ms_saved\nrejected_body_bytes rejected_header_bytes rejected_extension_bytes rejected_payload_bytes\nrejected_packet_preservation_failed\ncenter_rediscovery_failed\nextended_media_packets media_extension_bytes\n'.split())
 
@@ -1480,7 +1480,7 @@ class _sg_media_MediaSink:
             raise _sg_media_GridError('capture_close_failed')
 
 
-# Module: parent; source SHA-256: b461bd1d0651dab34818f3b7ccb0b994bbd2811c76285dfc6e4edec9d1b16add
+# Module: parent; source SHA-256: c9356851948d2707bc9763fb74b43874c955ed2052ee47797b918a28c8515d29
 import json as _sg_parent_json
 import struct as _sg_parent_struct
 import time as _sg_parent_time
@@ -2027,7 +2027,7 @@ def _sg_gateway_obtain_certificate(network, session, report):
         network.release(sock)
 
 
-# Module: stream; source SHA-256: 33a9902d0327c4f98a09a02f1e7bf1345a503e7c36bf50583b16a52e2fe78f24
+# Module: stream; source SHA-256: b1ffd30bfabdc6e60638e0bcf63091a4cd750145e9c84b2635821eacee0a8122
 import threading as _sg_stream_threading
 import time as _sg_stream_time
 import logging as _sg_stream_logging
@@ -2046,7 +2046,7 @@ _sg_stream_receive_media = _sg_parent_receive_media
 _sg_stream_Cancelled = _sg_protocol_Cancelled
 _sg_stream_GridError = _sg_protocol_GridError
 _sg_stream_Network = _sg_protocol_Network
-_sg_stream__log = _sg_stream_logging.getLogger('streamlink.plugins.soopgrid')
+_sg_stream__log = _sg_stream_logging.getLogger('streamlink.plugins.soop_grid')
 _sg_stream__INITIAL_TRANSPORT_FAILURES = {'tcp_connect_failed', 'peer_closed_or_truncated', 'network_read_failed', 'network_read_timeout', 'network_write_failed', 'parent_media_stalled', 'parent_retry_limit', 'parent_rediscovery_empty', 'no_usable_server_parent'}
 
 class _sg_stream_BoundedBuffer:
@@ -2347,7 +2347,7 @@ class _sg_stream_SoopAutoStream(_sg_stream_Stream):
                 self.fallback.clear()
 
 
-# Module: plugin; source SHA-256: bbb176e0400e8507543479dfd148d7151a2f7ac7569de8ca69d648e8b56db3b6
+# Module: plugin; source SHA-256: c7977d890652894bcb6f765d49a6ecb745042dbb364cb12d38dca7c44e9fd69d
 import os as _sg_plugin_os
 import re as _sg_plugin_re
 import logging as _sg_plugin_logging
@@ -2358,7 +2358,7 @@ _sg_plugin_GridError = _sg_protocol_GridError
 _sg_plugin_OfficialHLSFallback = _sg_stream_OfficialHLSFallback
 _sg_plugin_SoopAutoStream = _sg_stream_SoopAutoStream
 _sg_plugin_SoopGridStream = _sg_stream_SoopGridStream
-_sg_plugin_log = _sg_plugin_logging.getLogger('streamlink.plugins.soopgrid')
+_sg_plugin_log = _sg_plugin_logging.getLogger('streamlink.plugins.soop_grid')
 
 def _sg_plugin_official_hls_streams(session, url, account, password, stream_password):
     session.plugins.load_builtin()

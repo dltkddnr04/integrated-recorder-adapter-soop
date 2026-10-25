@@ -29,7 +29,7 @@ def test_actual_plugin_discovery_and_grid_stream_enumeration(url):
     session = Streamlink()
     assert session.plugins.load_path(str(ROOT / "plugins"))
     name, cls, resolved = session.resolve_url(url)
-    assert name == "soopgrid" and cls.__name__ == "SoopGridPlugin"
+    assert name == "soop_grid" and cls.__name__ == "SoopGridPlugin"
     plugin = cls(session, resolved)
     streams = plugin.streams()
     assert streams["original"].shortname() == "auto"
@@ -37,7 +37,17 @@ def test_actual_plugin_discovery_and_grid_stream_enumeration(url):
     assert cls(session, resolved, options={"transport": "grid"}).streams()["original"].shortname() == "grid"
     session.plugins.load_builtin()
     assert session.plugins.get_loaded()["soop"].__name__ == "Soop"
-    assert session.plugins.get_loaded()["soopgrid"] is cls
+    assert session.plugins.get_loaded()["soop_grid"] is cls
+
+
+def test_default_resolver_selects_grid_plugin_alongside_builtin_soop():
+    session = Streamlink()
+    session.plugins.load_builtin()
+    assert session.plugins.get_loaded()["soop"].__name__ == "Soop"
+    session.plugins.load_path(str(ROOT / "plugins"))
+    name, cls, url = session.resolve_url("https://play.sooplive.com/fixture_channel/12345")
+    assert name == "soop_grid" and cls.__name__ == "SoopGridPlugin"
+    assert cls(session, url).streams()["original"].shortname() == "auto"
 
 
 def test_modular_cli_sideload_from_unrelated_directory(tmp_path):

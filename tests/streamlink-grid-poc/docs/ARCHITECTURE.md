@@ -2,12 +2,12 @@
 
 The modular Python sources are canonical. They port the separately maintained Go
 Grid PoC and use Streamlink's public `Plugin`, `Stream`, and `StreamIO` interfaces.
-The plugin has a distinct `soopgrid` ID and matcher priority so the built-in `soop`
+The plugin has a distinct `soop_grid` ID and matcher priority so the built-in `soop`
 plugin remains available for HLS delegation.
 
 ```text
 Streamlink
-  └─ soopgrid plugin
+  └─ soop_grid plugin
       ├─ grid: first-party HTTP bootstrap -> Gateway -> Center -> Parent
       │                                  -> 0xC748 -> H.264/AAC -> one TS mux
       ├─ hls: delegates to Streamlink's built-in SOOP plugin
@@ -48,7 +48,9 @@ match, then requires exact next-frame numbering and nondecreasing per-stream tim
 The muxer and timestamp origin are retained. Missing overlap, sequence reset, changed
 quality/identity, timestamp regression, or conflicting data terminates output and
 records a gap. No frame is fabricated. This behavior is offline/loopback-tested;
-live SOOP cache overlap and natural Parent failure have not been verified.
+controlled client-side socket-close recovery against a live SOOP broadcast has been
+verified three times, including exact Cache overlap. Natural remote Parent failure
+and independent failure-domain transition have not been verified.
 
 Active-active Parent reception and cross-Parent aggregation are deliberately absent.
 The protocol's simultaneous-session limit, node-key scope and shared sequence space

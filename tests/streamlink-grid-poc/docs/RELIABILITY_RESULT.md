@@ -6,6 +6,9 @@
 > subsequent revision. See [PRODUCTION_READINESS_RESULT.md](PRODUCTION_READINESS_RESULT.md)
 > for current code and verification. The prior live measurement below remains a
 > historical observation and is not reclassified as a current-code live test.
+> A later controlled-live socket-close recovery run is documented in
+> [LIVE_FAILOVER_VALIDATION.md](LIVE_FAILOVER_VALIDATION.md); it verified three
+> cache-overlap recoveries but did not test natural remote Parent failure.
 
 Base repository commit: `8987d8811a9b7ac5b6144eca461637e171313572`.
 Changes are limited to this Python PoC. The Go PoC, production adapter, Streamlink

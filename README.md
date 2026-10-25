@@ -56,11 +56,11 @@ GOWORK=off go build -o integrated-recorder-adapter-soop ./cmd/integrated-recorde
 
 이 저장소는 [Adapter SDK for Go](https://github.com/integrated-recorder/adapter-sdk-go)를 사용합니다. 배포 상태와 release는 [Plugin Registry](https://github.com/integrated-recorder/plugin-registry)에서 확인하세요. 현재 stable official Registry 배포는 없습니다.
 
-## 실험적 Native Grid PoC
+## Experimental/Beta Streamlink Native Grid 플러그인
 
 독립 Go Grid 수신 연구와 합성 fixture 테스트는 [tests/grid-poc](tests/grid-poc/README.md)에 있습니다. 기존 Adapter Protocol v1 플러그인과 분리된 실험 코드이며 운영 어댑터에 통합되지 않았습니다.
 
-Python 포팅과 Streamlink 외부 플러그인 PoC는 [tests/streamlink-grid-poc](tests/streamlink-grid-poc/README.md)에 있습니다.
+별도 프로젝트인 Python Streamlink Native Grid 플러그인은 제한된 실제 수신과 제어된 Parent 장애 복구를 검증했으며, 현재 Experimental/Beta 상태입니다. 설치와 사용법은 [한국어 안내](tests/streamlink-grid-poc/README.md), 영어 안내는 [README.en.md](tests/streamlink-grid-poc/README.en.md)를 참고하세요. 이 플러그인은 Go Adapter와 Core에 통합되지 않았습니다.
 
 ## 생태계와 라이선스
 

@@ -20,7 +20,7 @@ from .parent import receive_media
 from .protocol import Cancelled, GridError, Network
 
 
-_log = logging.getLogger("streamlink.plugins.soopgrid")
+_log = logging.getLogger("streamlink.plugins.soop_grid")
 _INITIAL_TRANSPORT_FAILURES = {
     "tcp_connect_failed",
     "peer_closed_or_truncated",

@@ -1,5 +1,11 @@
 # Fast Failover and Cache Recovery Optimization
 
+> This optimization report records the implementation-era baseline. Its live
+> failover status predates the controlled live socket-close validation documented
+> in [LIVE_FAILOVER_VALIDATION.md](LIVE_FAILOVER_VALIDATION.md): three sequential
+> client-side Parent closes recovered through Center rediscovery and exact Cache
+> overlap. Natural remote Parent failure and multi-hour operation remain unverified.
+
 Status: experimental implementation; synthetic recovery benchmark and a short live
 capture completed. No new live Parent outage was observed in this run.
 
