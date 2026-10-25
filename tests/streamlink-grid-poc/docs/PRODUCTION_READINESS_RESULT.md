@@ -114,3 +114,85 @@ RELEASE_READINESS: EXPERIMENTAL_BETA; NOT_STABLE
 The older live capture measurements remain in [VALIDATION.md](VALIDATION.md) and
 [RELIABILITY_RESULT.md](RELIABILITY_RESULT.md), clearly labeled as prior revisions.
 They must not be interpreted as live verification of this updated build.
+
+## Field validation follow-up — 2026-10-25 UTC
+
+The current generated `dist/soop.py` was loaded as `soopgrid.py` by Streamlink 8.6.2
+in a clean Python 3.12 environment with no project package or `PYTHONPATH`. Normal
+public Watch, Gateway, Center, and Parent setup succeeded. Two capped Grid runs ended
+before their requested 300-second limit: one at 174.238 seconds and a second at
+256.094 seconds. The second process exited 1 with an empty captured diagnostic stream;
+the reason is unknown. Neither is a completed five-minute endurance run.
+
+The first run's private receiver sidecar recorded 10,780 `0xC748` packets
+(155,812,865 media payload bytes) and 160,557,452 bytes of MPEG-TS. The second TS was
+236,163,908 bytes. FFprobe identified both as H.264 1920×1080 at 60 fps with AAC
+48 kHz stereo. The second run contained 15,360 video packets and had 256.094 seconds
+of container duration.
+
+FFmpeg 9 decoded both complete captured audio/video TS files with `-xerror`, exit 0,
+and no diagnostics. For the first run, FFprobe read 10,440 video packets with zero
+non-monotonic DTS events and zero PTS-before-DTS packets; 7,743 recorded Grid video
+chunks had B-slices. For the second run, FFprobe read 15,360 video packets with zero
+non-monotonic DTS events and zero PTS-before-DTS packets; PTS reordered in decode
+packet order as expected for B-frame content. A TS scan found 188-byte sync, PAT/PMT,
+monotonic PCR (15,360 samples), and no payload continuity-counter errors. The first
+run's receiver sidecar recorded zero frame sequence gaps. The second run's audio
+started 94 ms before video and its measured stream durations differed by about 491 ms;
+these timestamps are observations, not a perceptual A/V sync verdict. The short-run
+process RSS stayed around 40–41 MiB, but this is not multi-hour memory validation.
+Wire/Payload/media captures remain private in temporary storage and are not in Git.
+
+A single normal Center discovery returned one usable Parent endpoint. Because the
+server did not provide a second distinct same-quality candidate, no second connection
+was attempted. Multi-Parent active-active remains unverified and unimplemented.
+
+A separate short live run through `--soop-grid-transport hls` delegated to the
+Streamlink built-in SOOP plugin and received 3,887,840 bytes of HLS TS; FFprobe saw
+H.264 960×540 at 60 fps and AAC 48 kHz stereo. The sample was interrupted during a
+segment: full `-xerror` decode failed on a corrupt/truncated packet. This verifies
+live HLS delegation and byte reception only, not a complete HLS recording. The built-in
+plugin remained loaded alongside the `soopgrid` sideload.
+
+The offline test PCR scanner was corrected to recognize PCR only when the adaptation
+field is large enough to contain the PCR flag. This fixes a false positive in the
+test parser; it does not change the TS muxer.
+
+Current field status: short live Grid capture, B-slice decoding, and TS timeline
+checks are verified; a complete five-minute capture, 30-minute/3-hour/6-hour
+endurance, live Parent failover, live
+multi-parent reception, clean HLS segment-boundary completion, automatic session
+reauthentication, and broadcast-end classification remain unverified. Only Linux
+was run directly; Windows/macOS are covered by a newly added CI matrix but have not
+yet had a hosted workflow result.
+
+```text
+LIVE_GRID_CAPTURE: VERIFIED (two partial-duration live files, both decoded)
+LIVE_BFRAME_DTS: VERIFIED (256-second live sample; DTS monotonic, PTS reordered)
+LIVE_AUDIO_VIDEO_SYNC: INCONCLUSIVE (timestamps measured; perceptual sync not tested)
+FULL_TS_DECODE: VERIFIED (both captured Grid TS files)
+FRAME_SEQUENCE_INTEGRITY: VERIFIED_FOR_FIRST_SAMPLE (zero receiver-reported gaps)
+LIVE_5MIN_CAPTURE: NOT_COMPLETED (runs ended at 174 s and 256 s)
+LIVE_10MIN_CAPTURE: NOT_TESTED
+LIVE_30MIN_CAPTURE: NOT_TESTED
+LIVE_3H_CAPTURE: NOT_TESTED
+LIVE_6H_CAPTURE: NOT_TESTED
+MEMORY_STABILITY: VERIFIED_SHORT_RUN_ONLY (RSS about 40–41 MiB)
+TIMESTAMP_LONG_DURATION: NOT_TESTED
+STREAM_TERMINATION_DETECTION: INCONCLUSIVE
+SESSION_REAUTHENTICATION: NOT_IMPLEMENTED
+MULTIPARENT_CANDIDATES_OBSERVED: NOT_AVAILABLE (one distinct server-issued candidate)
+MULTIPARENT_CONCURRENT_TCP: NOT_TESTED
+MULTIPARENT_CONCURRENT_MEDIA: NOT_TESTED
+MULTIPARENT_PROTOCOL_CONCLUSION: INCONCLUSIVE
+HLS_DELEGATION_LIVE: VERIFIED_BYTES_RECEIVED; INTERRUPTED SAMPLE DID NOT DECODE
+AUTO_FALLBACK: SYNTHETIC_VERIFIED_ONLY
+LINUX_RUNTIME: VERIFIED
+WINDOWS_RUNTIME: NOT_TESTED (CI matrix added; no hosted result)
+MACOS_RUNTIME: NOT_TESTED (CI matrix added; no hosted result)
+PYTHON_TESTS: 159 PASSED
+BUNDLE_TESTS: 154 PASSED
+GO_POC_TESTS: BLOCKED (Go toolchain unavailable)
+SOURCE_ADAPTER_TESTS: BLOCKED (Go toolchain unavailable)
+RELEASE_READINESS: EXPERIMENTAL/BETA
+```

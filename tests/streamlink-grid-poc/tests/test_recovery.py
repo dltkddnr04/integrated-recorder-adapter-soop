@@ -432,7 +432,9 @@ def test_recovered_ts_decodes_in_full(simulation, tmp_path, encoded_bframes):
     for offset in range(0, len(ts_bytes), 188):
         packet = ts_bytes[offset : offset + 188]
         pid = ((packet[1] & 0x1F) << 8) | packet[2]
-        if pid == 0x100 and packet[3] & 0x20 and packet[5] & 0x10:
+        # PCR_flag is meaningful only when the adaptation field actually has
+        # enough bytes for flags plus the six-byte PCR value.
+        if pid == 0x100 and packet[3] & 0x20 and packet[4] >= 7 and packet[5] & 0x10:
             pcr_values.append(
                 (packet[6] << 25)
                 | (packet[7] << 17)

@@ -39,9 +39,11 @@ fall back after authorization denial, malformed protocol/media, unsupported timi
 or after Grid bytes have been returned. It never mixes independent HLS and Grid
 timelines in one output.
 
-Grid records until the broadcast ends, the user stops Streamlink, or an optional
-limit is reached. `--soop-grid-duration SECONDS` sets a duration budget beginning at
-Parent reception; omission means no duration limit. `--soop-grid-max-bytes BYTES`
+Grid reads until the user stops Streamlink, the receiver encounters an end/error, or
+an optional limit is reached. The receiver does not yet reliably distinguish normal
+broadcast termination from Parent/network failure. `--soop-grid-duration SECONDS` sets
+a duration budget beginning at Parent reception; omission means no duration limit.
+`--soop-grid-max-bytes BYTES`
 optionally caps received Grid wire bytes. Streamlink's own `--stream-timeout` controls
 reader/backpressure waits; `--ringbuffer-size` controls the bounded output buffer.
 
@@ -85,7 +87,8 @@ Default recording is continuous, with bounded in-memory queues. Automatic creden
 refresh, broadcast rollover, crash-resume, and multi-hour live stability have not
 been verified. See [docs/PRODUCTION_READINESS_RESULT.md](docs/PRODUCTION_READINESS_RESULT.md),
 [architecture](docs/ARCHITECTURE.md), [reliability policy](docs/RELIABILITY.md), and
-[limitations](docs/LIMITATIONS.md).
+[limitations](docs/LIMITATIONS.md). A Korean community installation and usage guide is
+available at [docs/COMMUNITY_GUIDE_KO.md](docs/COMMUNITY_GUIDE_KO.md).
 
 ## Development checks
 
