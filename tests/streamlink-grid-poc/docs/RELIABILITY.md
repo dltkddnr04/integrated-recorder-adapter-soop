@@ -65,18 +65,19 @@ end status, move to a newly started BNO, or resume a partial file after process 
 A BNO change is not joined as continuation. Network/session expiry is surfaced as an
 error; the user may start a fresh session.
 
-## H.264 timing
+## H.264 and AAC timing
 
-For the supported progressive H.264 subset, POC determines presentation order and
-the observed Grid clock supplies decode-order timestamps. Fixed VUI frame timing and
-POC type 0 are required. PES video carries PTS and DTS; PCR follows DTS; AAC PTS is
-mapped to the same observed clock origin plus the reorder lead. 33-bit serialization
-wraps by specification while internal values remain unwrapped Python integers.
-Unsupported POC/profile/timing structures, changed codec configuration, and timing
-regressions fail closed. The test suite checks B-frame PTS reordering, monotonic DTS,
-full H.264/AAC decode, TS parsing, and absence of FFmpeg nonmonotonic-DTS diagnostics.
+POC 0/1/2 tracks picture order only. The current supported mapping derives DTS
+from observed Grid time and, when HRD is present, PTS from Picture Timing SEI DPB
+output delay. Fixed VUI timing alone does not map arbitrary POC distances to time.
+Without HRD, only constrained POC-2 or zero-reorder input may use PTS=DTS. Conflicts
+fail closed; missing evidence is not replaced by estimated FPS. Audio uses the same
+clock origin with no arbitrary reorder lead. AAC access-unit/sample counts and
+clock residuals are tracked independently of Grid message count.
 
-This is not exhaustive validation of all H.264 profiles or a perceptual A/V sync
-measurement. Live long-duration wrap, clock drift, audio/video synchronization, and
-multi-hour stability are not verified. See
-[PRODUCTION_READINESS_RESULT.md](PRODUCTION_READINESS_RESULT.md).
+PES/PCR serialization wraps by specification while internal timestamps remain
+unwrapped. Bounded startup retains early audio until valid SPS/PPS/IDR; unsupported
+parameter changes, timestamp regressions, and unprovable gaps terminate recording.
+See [H264_TIMING_DIAGNOSIS.md](H264_TIMING_DIAGNOSIS.md) for exact support boundaries
+and [COMPREHENSIVE_HARDENING.md](COMPREHENSIVE_HARDENING.md) for current verification.
+Perceptual A/V sync requires independent evidence beyond a decodable TS.

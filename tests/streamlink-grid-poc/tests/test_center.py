@@ -46,7 +46,8 @@ def test_issued_certificate_rejects_corruption(golden, kind):
         Credentials.parse(bytes(b), "0" * 32, 12345, password)
 
 
-def test_center_normal_sequence_and_server_denial(golden, monkeypatch):
+@pytest.mark.parametrize("join_first", [False, True])
+def test_center_normal_sequence_and_server_denial(golden, monkeypatch, join_first):
     import soop_grid.center as center
 
     class Net:
@@ -63,12 +64,14 @@ def test_center_normal_sequence_and_server_denial(golden, monkeypatch):
         def release(self, sock):
             self.released = True
 
+    join_replies = [Frame(0x4A, bytes(52)), Frame(0x46, b"")]
+    if join_first:
+        join_replies.reverse()
     replies = iter(
         [
             Frame(2, bytes(8)),
             Frame(3, struct.pack("<II", 0, 42)),
-            Frame(0x4A, bytes(52)),
-            Frame(0x46, b""),
+            *join_replies,
             Frame(0x50, b""),
             Frame(
                 0x69,
@@ -102,3 +105,46 @@ def test_center_normal_sequence_and_server_denial(golden, monkeypatch):
     monkeypatch.setattr(center, "read_frame", lambda *a: Frame(2, b"", -1))
     with pytest.raises(GridError, match="access_denied"):
         discover_parent(Net(), ("8.8.8.8", 1), credentials(golden), events.append)
+
+
+@pytest.mark.parametrize("ticket", [b"x\x12passwd\x11injected", b"x\x11injected"])
+def test_issued_ticket_cannot_inject_join_fields(golden, ticket):
+    body = bytearray.fromhex(golden["center"]["certificate"])
+    body[16:-28] = ticket + b"\0"
+    struct.pack_into("<I", body, 12, len(body) - 16)
+    with pytest.raises(GridError, match="issued_certificate_invalid"):
+        Credentials.parse(bytes(body), "0" * 32, 12345)
+
+
+def test_join_revalidates_mutable_credentials(golden):
+    c = credentials(golden)
+    c.ticket = b"ticket\x12passwd\x11injected"
+    with pytest.raises(GridError):
+        join_body(c)
+
+
+@pytest.mark.parametrize("command", [0x50, 0x69])
+def test_center_rejects_discovery_before_join(golden, monkeypatch, command):
+    import soop_grid.center as center
+
+    class Net:
+        released = False
+
+        def connect(self, address):
+            return object()
+
+        def send(self, *args):
+            pass
+
+        def release(self, sock):
+            self.released = True
+
+    parent_list = json_body(
+        {"list": [{"parent_ip": 0x08080808, "parent_port": 0x1027, "quality": 1, "cur_frame_no": 99}]}
+    )
+    replies = iter([Frame(2, bytes(8)), Frame(3, bytes(8)), Frame(command, parent_list)])
+    monkeypatch.setattr(center, "read_frame", lambda *a: next(replies))
+    net = Net()
+    with pytest.raises(GridError, match="sequence"):
+        discover_parent(net, ("8.8.8.8", 1), credentials(golden), lambda _: None)
+    assert net.released

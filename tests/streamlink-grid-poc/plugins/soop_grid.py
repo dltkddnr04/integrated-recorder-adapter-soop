@@ -17,7 +17,7 @@ from streamlink.plugin import Plugin, pluginargument, pluginmatcher
 
 from soop_grid.bootstrap import Config
 from soop_grid.protocol import GridError
-from soop_grid.stream import OfficialHLSFallback, SoopAutoStream, SoopGridStream
+from soop_grid.stream import OfficialHLSFallback, SoopAutoStream, SoopGridStream, official_hls_plugin
 
 
 log = logging.getLogger("streamlink.plugins.soop_grid")
@@ -27,19 +27,13 @@ def official_hls_streams(session, url, account, password, stream_password, purge
     # Keep HLS behavior in Streamlink's maintained SOOP plugin. This sideloaded
     # plugin uses a separate ID and priority, so the built-in `soop` remains
     # loaded and is delegated to through the public plugin/session APIs.
-    session.plugins.load_builtin()
-    plugin_class = session.plugins.get_loaded().get("soop")
-    if plugin_class is None:
-        return {}
-    plugin = plugin_class(
+    plugin = official_hls_plugin(
         session,
         url,
-        options={
-            "username": account,
-            "password": password,
-            "stream-password": stream_password,
-            "purge-credentials": purge_credentials,
-        },
+        account,
+        password,
+        stream_password,
+        purge_credentials,
     )
     return plugin.streams()
 
@@ -126,14 +120,10 @@ class SoopGridPlugin(Plugin):
         )
         account_password = self.get_option("grid-password")
         if account_password is None:
-            account_password = os.environ.pop("SOOP_ACCOUNT_PASSWORD", "")
-        else:
-            os.environ.pop("SOOP_ACCOUNT_PASSWORD", None)
+            account_password = os.environ.get("SOOP_ACCOUNT_PASSWORD", "")
         stream_password = self.get_option("grid-stream-password")
         if stream_password is None:
-            stream_password = os.environ.pop("SOOP_STREAM_PASSWORD", "")
-        else:
-            os.environ.pop("SOOP_STREAM_PASSWORD", None)
+            stream_password = os.environ.get("SOOP_STREAM_PASSWORD", "")
         purge_credentials = bool(self.get_option("grid-purge-credentials"))
         if bool(account) != bool(account_password) or stream_password and not account:
             raise PluginError("account_credentials_required")
@@ -167,7 +157,9 @@ class SoopGridPlugin(Plugin):
             diagnostics_dir=self.get_option("grid-diagnostics")
             or os.environ.get("SOOP_GRID_DIAGNOSTICS_DIR")
             or None,
-            referer=self.url,
+            referer="https://play.sooplive.com/"
+            + self.match["channel"]
+            + ("/" + self.match["bno"] if self.match["bno"] else ""),
             user_agent=self.session.http.headers.get("User-Agent"),
         )
         try:

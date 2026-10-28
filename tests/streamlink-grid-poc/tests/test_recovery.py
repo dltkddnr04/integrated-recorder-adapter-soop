@@ -429,7 +429,11 @@ def test_recovered_ts_decodes_in_full(simulation, tmp_path, encoded_bframes):
     while offset < len(data):
         length = ((data[offset + 3] & 3) << 11) | (data[offset + 4] << 3) | (data[offset + 5] >> 5)
         assert length >= 7
-        samples.append((index * 1024 * 10_000_000 // 48000, data[offset : offset + length], "A"))
+        # Video inputs carry decode time. This explicit two-B-frame encoder
+        # starts presentation two frame intervals later; audio carries PTS on
+        # that same common clock, not the first video's earlier DTS.
+        audio_pts = 2 * 10_000_000 // 30 + index * 1024 * 10_000_000 // 48000
+        samples.append((audio_pts, data[offset : offset + length], "A"))
         offset += length
         index += 1
     samples.sort(key=lambda x: x[0])
@@ -630,6 +634,120 @@ def test_control_traffic_cannot_hide_media_stall(monkeypatch):
     assert reads == [3] and all(s.closed for s in net.sockets)
 
 
+@pytest.mark.parametrize("recovering", [False, True])
+def test_duplicate_media_cannot_hide_lack_of_progress(monkeypatch, recovering):
+    import soop_grid.parent as parent
+    from soop_grid.protocol import Frame
+
+    clock = [0]
+    monkeypatch.setattr(parent.time, "monotonic", lambda: clock[0])
+    reads = []
+    net = SyntheticNetwork([(b"", "eof")] * (2 if recovering else 1), clock)
+
+    def repeated_media(*_):
+        if recovering and len(reads) == 1:
+            reads.append("outage")
+            raise GridError("peer_closed_or_truncated")
+        clock[0] += 1
+        reads.append("media")
+        # Keep the original implementation's failure bounded as well.
+        if clock[0] > 8:
+            raise GridError("synthetic_duplicate_loop")
+        wire = media(1)
+        return Frame(0xC748, wire[16:], wire=wire)
+
+    monkeypatch.setattr(parent, "read_frame", repeated_media)
+    sink = SyntheticSink(lambda _: None)
+    events = []
+    with pytest.raises(GridError, match="recovery_candidates_exhausted"):
+        receive_media(
+            net,
+            [Parent(("8.8.8.8", 1), 1, 0)] * len(net.scripts),
+            12345,
+            42,
+            sink,
+            events.append,
+        )
+    assert "parent_media_stalled" in events
+    assert clock[0] <= 4
+    assert sink.stats["video_frames"] == 1
+    assert all(s.closed for s in net.sockets)
+
+
+def test_cancelled_rediscovery_does_not_report_recovery_failure():
+    net = SyntheticNetwork([], [0])
+    sink = SyntheticSink(lambda _: None)
+    events = []
+
+    def rediscover():
+        net.stop.set()
+        raise Cancelled("receiver_closed")
+
+    with pytest.raises(Cancelled):
+        receive_media(net, [], 12345, 42, sink, events.append, rediscover=rediscover)
+    assert "recovery_failed" not in events
+    assert "center_rediscovery_failed" not in events
+    assert "recovery_failure_code" not in sink.stats
+
+
+def test_node_key_scope_across_candidates_and_repeated_rediscovery(simulation):
+    keys_issued = iter((123, 124))
+
+    def rediscover():
+        key = next(keys_issued)
+        return [Parent(("1.1.1.1", 10000), 1, 0)] * (2 if key == 123 else 1), key
+
+    sink, _, _, net = simulation(
+        [
+            (b"", "eof"),
+            (controls() + media(1), "eof"),
+            (b"", "eof"),
+            (controls() + media(1) + media(2), "eof"),
+            (controls() + media(2) + media(3), "deadline"),
+        ],
+        rediscover,
+        count=2,
+    )
+    keys = [
+        struct.unpack_from("<III", wire, 16)[1]
+        for wire in net.writes
+        if struct.unpack_from("<H", wire, 2)[0] == 0xCB2E
+    ]
+    assert keys == [42, 42, 123, 123, 124]
+    assert sink.stats["failover_successes"] == 2
+
+
+def test_overlap_anchor_cannot_be_reused_on_a_different_connection():
+    from soop_grid.recovery import Continuity
+
+    continuity = Continuity({}, lambda _: None)
+
+    def chunk(number):
+        return parse_media(media(number)[16:])
+
+    assert continuity.accept(chunk(1))
+    continuity.committed()
+    continuity.begin()
+    assert not continuity.accept(chunk(1))
+    # The peer fails after overlap; its replacement must prove overlap again.
+    continuity.begin()
+    with pytest.raises(GridError, match="recovery_overlap_unavailable"):
+        continuity.accept(chunk(2))
+
+
+def test_evicted_overlap_is_fail_closed_and_identity_window_is_bounded():
+    from soop_grid.recovery import Continuity
+
+    continuity = Continuity({}, lambda _: None)
+    for number in range(1, 130):
+        assert continuity.accept(parse_media(media(number)[16:]))
+        continuity.committed()
+    assert len(continuity.recent) == 128
+    continuity.begin()
+    with pytest.raises(GridError, match="recovery_overlap_unavailable"):
+        continuity.accept(parse_media(media(1)[16:]))
+
+
 def test_live_push_request_is_not_reported_as_live_catchup_completion(simulation):
     _, _, events, _ = simulation(
         [
@@ -681,3 +799,68 @@ def test_recovery_events_and_metrics_have_no_endpoint_or_secret_fields(simulatio
     assert not any("address" in key or "ticket" in key or "node_key" in key for key in facts)
     assert "catchup_duration_ms" not in facts
     assert facts["catchup_state"] == "unverified_live_boundary"
+
+
+@pytest.mark.parametrize("media_progress", [False, True])
+def test_rediscovery_deadline_has_same_semantics_as_parent_read_deadline(monkeypatch, media_progress):
+    import soop_grid.parent as parent
+
+    clock = [0.0]
+    monkeypatch.setattr(parent.time, "monotonic", lambda: clock[0])
+    wire, ending = (controls() + media(1), "eof") if media_progress else (b"", "connect")
+    network = SyntheticNetwork([(wire, ending)], clock)
+    sink = SyntheticSink(lambda _: None)
+    events = []
+
+    def rediscover():
+        clock[0] = 1.0
+        raise GridError("capture_deadline_reached")
+
+    args = (network, [Parent(("8.8.8.8", 10000), 1, 0)], 12345, 42, sink, events.append)
+    if media_progress:
+        with pytest.raises(GridError, match="^recovery_deadline_exhausted$"):
+            receive_media(*args, duration=1, rediscover=rediscover)
+        assert sink.stats["recovery_failure_code"] == "recovery_deadline_exhausted"
+        assert "stop_reason" not in sink.stats
+    else:
+        receive_media(*args, duration=1, rediscover=rediscover)
+        assert sink.stats["stop_reason"] == "duration_limit"
+        assert "grid_duration_limit_reached" in events
+    assert "center_rediscovery_failed" not in events
+    assert not sink.stats.get("center_rediscovery_failed")
+    assert all(sock.closed for sock in network.sockets)
+
+
+@pytest.mark.parametrize("media_progress", [False, True])
+@pytest.mark.parametrize("failure", ["network_read_failed", "capture_deadline_reached"])
+def test_rediscovery_stop_flag_precedes_error_and_deadline(monkeypatch, media_progress, failure):
+    import soop_grid.parent as parent
+
+    clock = [0.0]
+    monkeypatch.setattr(parent.time, "monotonic", lambda: clock[0])
+    wire, ending = (controls() + media(1), "eof") if media_progress else (b"", "connect")
+    network = SyntheticNetwork([(wire, ending)], clock)
+    sink = SyntheticSink(lambda _: None)
+    events = []
+
+    def rediscover():
+        network.stop.set()
+        clock[0] = 1.0
+        raise GridError(failure)
+
+    with pytest.raises(Cancelled, match="^receiver_closed$"):
+        receive_media(
+            network,
+            [Parent(("8.8.8.8", 10000), 1, 0)],
+            12345,
+            42,
+            sink,
+            events.append,
+            duration=1,
+            rediscover=rediscover,
+        )
+    assert "stop_reason" not in sink.stats
+    assert not sink.stats.get("center_rediscovery_failed")
+    assert "grid_duration_limit_reached" not in events
+    assert "center_rediscovery_failed" not in events
+    assert all(sock.closed for sock in network.sockets)

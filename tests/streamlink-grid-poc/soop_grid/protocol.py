@@ -13,6 +13,10 @@ from dataclasses import dataclass, field
 class GridError(Exception):
     """Only fixed, non-secret stage codes may be exposed to the caller."""
 
+    def __init__(self, code, *, safe_facts=None):
+        super().__init__(code)
+        self.safe_facts = safe_facts
+
 
 class Cancelled(GridError):
     pass
@@ -88,7 +92,17 @@ def read_frame(sock, family, timeout=4):
         if check != command ^ size:
             if family == "gateway" and result == -1 and check == ((command ^ size) ^ 0xFFFFFFFF):
                 raise GridError("gateway_negative_reply")
-            raise GridError("control_checksum_invalid")
+            raise GridError(
+                "control_checksum_invalid",
+                safe_facts={
+                    "family": family,
+                    "command": command,
+                    "result": result,
+                    "declared_body_bytes": size,
+                    "checksum_received": check,
+                    "checksum_expected": command ^ size,
+                },
+            )
         limit = (64 << 10) if family == "gateway" else (1 << 20)
     if size > limit:
         raise GridError("incoming_body_limit")
@@ -118,16 +132,22 @@ class Network:
     def connect(self, address):
         address = endpoint(*address)
         timeout = self.remaining(3)
-        with self._lock:
-            if self.stop.is_set():
-                raise Cancelled("receiver_closed")
-            sock = socket.socket(socket.AF_INET6 if ":" in address[0] else socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(timeout)
-            self._sockets.add(sock)
+        sock = None
         try:
+            with self._lock:
+                if self.stop.is_set():
+                    raise Cancelled("receiver_closed")
+                sock = socket.socket(
+                    socket.AF_INET6 if ":" in address[0] else socket.AF_INET, socket.SOCK_STREAM
+                )
+                self._sockets.add(sock)
+                sock.settimeout(timeout)
             sock.connect(address)
         except OSError:
-            self.release(sock)
+            if sock is not None:
+                self.release(sock)
+            if self.stop.is_set():
+                raise Cancelled("receiver_closed") from None
             raise GridError("tcp_connect_failed") from None
         if self.stop.is_set():
             self.release(sock)
@@ -141,12 +161,18 @@ class Network:
             sock.settimeout(self.remaining(2))
             sock.sendall(data)
         except OSError:
+            if self.stop.is_set():
+                raise Cancelled("receiver_closed") from None
             raise GridError("network_write_failed") from None
 
     def release(self, sock):
         with self._lock:
             self._sockets.discard(sock)
-        sock.close()
+        try:
+            sock.close()
+        except OSError:
+            # Cleanup must not mask the operation's primary error.
+            pass
 
     def close(self):
         self.stop.set()
@@ -158,4 +184,8 @@ class Network:
                 sock.shutdown(socket.SHUT_RDWR)
             except OSError:
                 pass
-            sock.close()
+            try:
+                sock.close()
+            except OSError:
+                # One failed close must not strand the remaining sockets.
+                pass

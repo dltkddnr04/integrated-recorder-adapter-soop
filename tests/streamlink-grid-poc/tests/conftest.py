@@ -91,8 +91,16 @@ def encoded_bframes(tmp_path_factory):
             "libx264",
             "-preset",
             "ultrafast",
+            "-b:v",
+            "400k",
+            "-minrate",
+            "400k",
+            "-maxrate",
+            "400k",
+            "-bufsize",
+            "800k",
             "-x264-params",
-            "bframes=2:keyint=15:min-keyint=15:scenecut=0:aud=1:repeat-headers=1:force-cfr=1",
+            "bframes=2:keyint=15:min-keyint=15:scenecut=0:aud=1:repeat-headers=1:force-cfr=1:nal-hrd=cbr",
             "-f",
             "h264",
             str(path),
@@ -113,3 +121,85 @@ def encoded_bframes(tmp_path_factory):
     result = [(unit, "I" if any(n[0] & 31 == 5 for n in nals(unit)) else "P") for unit in units]
     assert any(n[0] & 31 == 1 for unit, _ in result[1:] for n in nals(unit))
     return result
+
+
+@pytest.fixture(scope="session")
+def encoded_poc2_no_vui(tmp_path_factory):
+    """Real POC type 2, no fixed VUI clock, progressive no-B test stream."""
+    ffmpeg = os.environ.get("SOOP_TEST_FFMPEG") or shutil.which("ffmpeg")
+    if not ffmpeg:
+        pytest.skip("FFmpeg required to synthesize a POC type 2 fixture")
+    encoders = subprocess.run(
+        [ffmpeg, "-hide_banner", "-encoders"], capture_output=True, timeout=15, check=True
+    ).stdout
+    if b"libopenh264" not in encoders:
+        pytest.skip("FFmpeg libopenh264 encoder required for a real POC type 2 fixture")
+    path = tmp_path_factory.mktemp("h264-poc2") / "video.h264"
+    result = subprocess.run(
+        [
+            ffmpeg,
+            "-v",
+            "error",
+            "-nostdin",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=160x96:rate=30",
+            "-frames:v",
+            "60",
+            "-an",
+            "-c:v",
+            "libopenh264",
+            "-b:v",
+            "300k",
+            "-g",
+            "30",
+            "-f",
+            "h264",
+            str(path),
+        ],
+        capture_output=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr.decode("utf-8", "replace")
+
+    from soop_grid.h264clock import _slice_pps_id, parse_pps, parse_slice, parse_sps
+    from soop_grid.mpegts import nals
+
+    units = nals(path.read_bytes())
+    sps, pps, pending, current, access_units = {}, {}, [], [], []
+    for nal in units:
+        kind = nal[0] & 31
+        if kind == 7:
+            info = parse_sps(nal)
+            sps[info["id"]] = info
+        elif kind == 8:
+            info = parse_pps(nal)
+            pps[info["id"]] = info
+        if kind in (1, 5):
+            pps_id = _slice_pps_id(nal)
+            header = parse_slice(nal, sps[pps[pps_id]["sps_id"]], pps[pps_id])
+            if header.first_mb == 0 and current:
+                access_units.append(current)
+                current = []
+            if not current:
+                current.extend(pending)
+                pending = []
+            current.append(nal)
+        elif current:
+            pending.append(nal)
+        else:
+            pending.append(nal)
+    if current:
+        access_units.append(current)
+    result_units = [b"".join(b"\0\0\0\1" + nal for nal in au) for au in access_units]
+    assert len(result_units) == 60
+    assert sps and {info["poc_type"] for info in sps.values()} == {2}
+    assert all(not info["timing_fixed"] for info in sps.values())
+    for access_unit in result_units:
+        for nal in nals(access_unit):
+            if nal[0] & 31 in (1, 5):
+                pps_id = _slice_pps_id(nal)
+                header = parse_slice(nal, sps[pps[pps_id]["sps_id"]], pps[pps_id])
+                assert header.slice_kind != "B"
+    return result_units

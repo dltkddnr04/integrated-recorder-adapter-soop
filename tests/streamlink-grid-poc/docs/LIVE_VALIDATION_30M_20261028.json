@@ -1,0 +1,177 @@
+{
+  "verdict": "pass",
+  "passed": true,
+  "failures": [],
+  "scope": "structural_decode_and_timing_only",
+  "ts": {
+    "packets": 10086527,
+    "sync_errors": 0,
+    "continuity_errors": 0,
+    "pat": 1801,
+    "pmt": 1801,
+    "pcr_samples": 108010,
+    "pcr_regressions": 0,
+    "explicit_discontinuities": 0,
+    "transport_errors": 0,
+    "scrambled_packets": 0,
+    "adaptation_errors": 0,
+    "psi_crc_errors": 0,
+    "psi_structure_errors": 0,
+    "duplicate_packets": 0,
+    "max_pcr_value_delta_seconds": 0.025,
+    "pcr_progression_pair_counts": {
+      "0x100": 108009
+    },
+    "missing_pmt_pids": 0,
+    "pcr_pid_declarations": [
+      "0x100"
+    ],
+    "pes_payloads": {
+      "0x100": {
+        "bytes": 1798277036,
+        "pes_packets": 108010,
+        "complete_pes_packets": 108010,
+        "header_errors": 0,
+        "truncated_pes": 0,
+        "orphan_payload_bytes": 0,
+        "extra_payload_bytes": 0,
+        "sha256": "6b56f092188e559c949cb4ca5754e867ab7442982e4839e9703ef7f013f06fbd"
+      },
+      "0x101": {
+        "bytes": 43790621,
+        "pes_packets": 3600,
+        "complete_pes_packets": 3600,
+        "header_errors": 0,
+        "truncated_pes": 0,
+        "orphan_payload_bytes": 0,
+        "extra_payload_bytes": 0,
+        "sha256": "654301291fc3fa34e016fe4b769fb7199e4e7fa5e19ce6a1bc30b95bd3e7506e"
+      }
+    }
+  },
+  "ts_sha256": "bd7d77237ba9d698bd655f90347790bcb4b63546559377cfefca9ddcc1e09ea6",
+  "probe": {
+    "exit_code": 0,
+    "timed_out": false,
+    "launch_failed": false,
+    "diagnostic_lines": 0
+  },
+  "ffprobe_exit": 0,
+  "media": {
+    "streams": [
+      {
+        "index": 0,
+        "codec_type": "video",
+        "codec_name": "h264",
+        "width": 1920,
+        "height": 1080
+      },
+      {
+        "index": 1,
+        "codec_type": "audio",
+        "codec_name": "aac",
+        "sample_rate": 48000,
+        "channels": 2
+      }
+    ]
+  },
+  "packets": {
+    "process": {
+      "exit_code": 0,
+      "timed_out": false,
+      "launch_failed": false,
+      "diagnostic_lines": 0
+    },
+    "streams": {
+      "video": {
+        "packets": 108010,
+        "missing_pts": 0,
+        "missing_dts": 0,
+        "missing_duration": 0,
+        "nonmonotonic_dts": 0,
+        "pts_reorder_steps": 0,
+        "pts_before_dts": 0,
+        "pts_overlap_packets": 0,
+        "max_pts_overlap_seconds": 0.0,
+        "start_seconds": 1.016667,
+        "end_seconds": 1801.1103340000002,
+        "duration_seconds": 1800.093667
+      },
+      "audio": {
+        "packets": 84375,
+        "missing_pts": 0,
+        "missing_dts": 0,
+        "missing_duration": 0,
+        "nonmonotonic_dts": 0,
+        "pts_reorder_steps": 0,
+        "pts_before_dts": 0,
+        "pts_overlap_packets": 0,
+        "max_pts_overlap_seconds": 0.0,
+        "start_seconds": 0.886667,
+        "end_seconds": 1800.8866659999999,
+        "duration_seconds": 1799.999999
+      }
+    },
+    "malformed_rows": 0
+  },
+  "packet_av": {
+    "start_offset_seconds": -0.13,
+    "end_offset_seconds": -0.22366800000031617,
+    "coverage_offset_change_seconds": -0.09366800000031617,
+    "drift_seconds": -0.09366800000031617,
+    "interpretation": "coverage_boundaries_only_not_source_clock_drift_or_perceptual_sync"
+  },
+  "decode": {
+    "process": {
+      "exit_code": 0,
+      "timed_out": false,
+      "launch_failed": false,
+      "diagnostic_lines": 0
+    },
+    "streams": {
+      "video": {
+        "frames": 108010,
+        "start_seconds": 1.0166666666666666,
+        "end_seconds": 1801.1103333333335,
+        "duration_seconds": 1800.0936666666669
+      },
+      "audio": {
+        "frames": 84375,
+        "start_seconds": 0.8866666666666666,
+        "end_seconds": 1800.8866666666665,
+        "pcm_bytes": 345600000,
+        "pcm_samples_per_channel": 86400000,
+        "sample_rate": 48000,
+        "channels": 2,
+        "pcm_duration_seconds": 1800.0,
+        "duration_seconds": 1799.9999999999998,
+        "timeline_minus_pcm_duration_seconds": -2.2737367544323206e-13
+      }
+    }
+  },
+  "decoded_av": {
+    "start_offset_seconds": -0.13,
+    "end_offset_seconds": -0.2236666666669862,
+    "coverage_offset_change_seconds": -0.0936666666669862,
+    "drift_seconds": -0.0936666666669862,
+    "interpretation": "coverage_boundaries_only_not_source_clock_drift_or_perceptual_sync"
+  },
+  "duration_gate": {
+    "minimum_seconds": 1800.0,
+    "video_seconds": 1800.0936666666669,
+    "audio_pcm_seconds": 1800.0,
+    "passed": true
+  },
+  "aac": {
+    "process": {
+      "exit_code": 0,
+      "timed_out": false,
+      "launch_failed": false,
+      "diagnostic_lines": 0
+    },
+    "adts_frames": 84375,
+    "aac_access_units": 84375,
+    "compressed_bytes": 43790621,
+    "trailing_bytes": 0
+  }
+}

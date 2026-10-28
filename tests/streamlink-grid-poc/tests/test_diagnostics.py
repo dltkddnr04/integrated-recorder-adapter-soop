@@ -1,11 +1,13 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright (c) 2026 source.soop contributors
+import ast
 import errno
 import importlib.util
 import json
 import os
 from pathlib import Path
 import sys
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -33,7 +35,14 @@ def tool():
         (GridError("peer_closed_or_truncated"), "network_eof"),
         (GridError("recovery_overlap_unavailable"), "cache_overlap_unavailable"),
         (GridError("h264_timing_changed"), "media_timestamp_invalid"),
+        (GridError("h264_hrd_grid_clock_conflict"), "media_timing_unconfirmed"),
+        (GridError("h264_hrd_low_delay_timing_unsupported"), "media_timing_unconfirmed"),
+        (GridError("h264_picture_order_conflict"), "media_timestamp_invalid"),
+        (GridError("audio_timestamp_cumulative_drift"), "media_timestamp_invalid"),
+        (GridError("audio_chunk_clock_mismatch"), "media_timestamp_invalid"),
+        (GridError("duration_limit_output_incomplete"), "duration_limit_output_incomplete"),
         (GridError("parent_access_denied"), "authentication_denied"),
+        (GridError("live_metadata_denied_or_offline"), "receiver_error"),
         (OSError(errno.ENOSPC, "fixture-private-value"), "disk_write_error"),
         (ValueError("fixture-private-value"), "receiver_internal_error"),
     ],
@@ -43,10 +52,97 @@ def test_stop_classification_never_needs_exception_text(error, expected):
     assert "fixture-private" not in safe_error(error)
 
 
+def test_h264_reorder_timing_failure_uses_fixed_safe_code():
+    error = GridError("h264_reorder_timing_unconfirmed")
+    assert safe_error(error) == "h264_reorder_timing_unconfirmed"
+
+
+def test_all_literal_grid_errors_have_safe_diagnostic_codes():
+    package = Path(__file__).resolve().parents[1] / "soop_grid"
+    missing = set()
+    for path in package.glob("*.py"):
+        tree = ast.parse(path.read_text())
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not node.args:
+                continue
+            function = node.func
+            if not (
+                isinstance(function, ast.Name)
+                and function.id == "GridError"
+                or isinstance(function, ast.Attribute)
+                and function.attr == "GridError"
+            ):
+                continue
+            if isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
+                if safe_error(GridError(node.args[0].value)) != node.args[0].value:
+                    missing.add((node.args[0].value, path.name, node.lineno))
+    assert not missing
+
+
+def test_protocol_header_facts_are_allowlisted_without_raw_values(tmp_path):
+    path = tmp_path / "wire-facts"
+    d = Diagnostics(path, lambda: {})
+    d.fail(
+        GridError(
+            "control_checksum_invalid",
+            safe_facts={
+                "family": "center",
+                "command": 0x69,
+                "result": 0,
+                "declared_body_bytes": 12,
+                "checksum_received": 1,
+                "checksum_expected": 2,
+                "cookie": "fixture-secret",
+                "raw_packet": b"private-wire",
+            },
+        )
+    )
+    d.close()
+    summary = json.loads((path / "summary.json").read_text())
+    assert summary["protocol_failure"] == {
+        "family": "center",
+        "command": 0x69,
+        "result": 0,
+        "declared_body_bytes": 12,
+        "checksum_received": 1,
+        "checksum_expected": 2,
+    }
+    text = (path / "summary.json").read_text()
+    assert "fixture-secret" not in text and "private-wire" not in text
+
+
 def test_diagnostic_allowlist_atomic_summary_and_first_cause(tmp_path):
     path = tmp_path / "diagnostics"
     d = Diagnostics(
-        path, lambda: {"payload_bytes": 4, "cookie": "fixture-private-value", "reader_state": "error"}
+        path,
+        lambda: {
+            "payload_bytes": 4,
+            "audio_chunk_overlap_100ns": 120000,
+            "audio_max_chunk_overlap_100ns": 120000,
+            "cookie": "fixture-private-value",
+            "reader_state": "error",
+            "h264_poc_type": 2,
+            "h264_fixed_vui_timing": 0,
+            "last_video_poc": 18,
+            "h264_rejected_cpb_removal_delay": 18,
+            "h264_previous_cpb_removal_delay": 16,
+            "h264_rejected_cpb_delta": 2,
+            "h264_rejected_grid_delta_100ns": 160000,
+            "h264_rejected_cpb_delta_100ns": 166667,
+            "h264_rejected_cpb_delay_width": 16,
+            "h264_rejected_clock_tolerance_100ns": 10000,
+            "h264_rejected_cpb_epoch_ticks": 2,
+            "h264_rejected_cpb_epoch_delta_100ns": 166667,
+            "h264_rejected_grid_epoch_delta_100ns": 180000,
+            "h264_current_dts_90k": 91530,
+            "h264_current_candidate_pts_90k": 93030,
+            "h264_conflicting_reference_poc": 0,
+            "h264_conflicting_reference_pts_90k": 103500,
+            "h264_clock_tick_100ns_numerator": 250000,
+            "h264_clock_tick_100ns_denominator": 3,
+            "last_video_slice_type": "P",
+            "unexpected_media": b"private-payload",
+        },
     )
     d.start()
     d.event("fixture-private-value", "fixture-private-value")
@@ -57,6 +153,21 @@ def test_diagnostic_allowlist_atomic_summary_and_first_cause(tmp_path):
     assert "fixture-private" not in text and "cookie" not in text
     summary = json.loads((path / "summary.json").read_text())
     assert summary["stop_reason"] == "network_timeout" and summary["payload_bytes"] == 4
+    assert summary["audio_chunk_overlap_100ns"] == 120000
+    assert summary["audio_max_chunk_overlap_100ns"] == 120000
+    assert summary["h264_poc_type"] == 2
+    assert summary["h264_fixed_vui_timing"] == 0 and summary["last_video_poc"] == 18
+    assert summary["h264_rejected_cpb_removal_delay"] == 18
+    assert summary["h264_rejected_cpb_delta"] == 2
+    assert summary["h264_rejected_grid_delta_100ns"] == 160000
+    assert summary["h264_rejected_grid_epoch_delta_100ns"] == 180000
+    assert summary["h264_current_candidate_pts_90k"] == 93030
+    assert summary["h264_conflicting_reference_poc"] == 0
+    assert summary["h264_conflicting_reference_pts_90k"] == 103500
+    assert summary["h264_clock_tick_100ns_numerator"] == 250000
+    assert summary["h264_clock_tick_100ns_denominator"] == 3
+    assert summary["last_video_slice_type"] == "P"
+    assert "unexpected_media" not in summary and "private-payload" not in text
     assert not (path / "summary.tmp").exists() and not d.thread.is_alive()
     if os.name != "nt":
         assert (path / "summary.json").stat().st_mode & 0o777 == 0o600
@@ -64,11 +175,28 @@ def test_diagnostic_allowlist_atomic_summary_and_first_cause(tmp_path):
         Diagnostics(path, lambda: {})
 
 
+def test_diagnostics_do_not_export_media_content_fingerprints(tmp_path):
+    fingerprints = {
+        "video_output_sha256": "a" * 64,
+        "audio_output_sha256": "b" * 64,
+        "payload_sha256": "c" * 64,
+    }
+    d = Diagnostics(tmp_path / "diagnostics", lambda: fingerprints)
+    d.complete("duration_limit")
+    d.close()
+    text = "".join(p.read_text() for p in (tmp_path / "diagnostics").iterdir())
+    assert not any(key in text for key in fingerprints)
+    assert not any(value in text for value in fingerprints.values())
+
+
 def test_diagnostic_storage_failure_does_not_expose_raw_os_error(tmp_path, caplog):
     d = Diagnostics(tmp_path / "diag", lambda: {})
     original = d.file
 
     class Full:
+        def tell(self):
+            return 0
+
         def write(self, data):
             raise OSError(errno.ENOSPC, "fixture-private-path")
 
@@ -78,6 +206,85 @@ def test_diagnostic_storage_failure_does_not_expose_raw_os_error(tmp_path, caplo
     assert "fixture-private" not in caplog.text
     d.file = original
     d.close()
+
+
+def test_diagnostic_event_log_has_a_hard_byte_limit_and_atomic_summary(tmp_path, monkeypatch):
+    import soop_grid.diagnostics as diagnostics_module
+
+    monkeypatch.setattr(diagnostics_module, "MAX_EVENT_LOG_BYTES", 2048)
+    d = Diagnostics(tmp_path / "bounded", lambda: {"payload_bytes": 12})
+    for _ in range(1000):
+        d.event("parent", "heartbeat")
+    d.fail(GridError("network_read_timeout"))
+    d.close()
+    path = tmp_path / "bounded"
+    event_data = (path / "events.jsonl").read_bytes()
+    summary = json.loads((path / "summary.json").read_text())
+    assert len(event_data) <= 2048
+    assert summary["diagnostic_events_truncated"] is True
+    assert b"diagnostic_event_log_limit_reached" in event_data
+    assert summary["stop_reason"] == "network_timeout"
+
+
+def test_per_frame_progress_events_are_rate_limited_but_heartbeats_remain(tmp_path, monkeypatch):
+    import soop_grid.diagnostics as diagnostics_module
+
+    now = [100.0]
+    monkeypatch.setattr(diagnostics_module.time, "monotonic", lambda: now[0])
+    d = Diagnostics(tmp_path / "rate-limited", lambda: {"video_frames": 1})
+    d.event("parent", "parent_last_media_received")
+    for _ in range(1000):
+        d.event("parent", "parent_last_media_received")
+    now[0] += 9.9
+    d.event("parent", "parent_last_media_received")
+    now[0] += 0.1
+    d.event("parent", "parent_last_media_received")
+    d.event("parent", "parent_connection_lost")
+    d.close()
+
+    rows = [
+        json.loads(line) for line in (tmp_path / "rate-limited" / "events.jsonl").read_text().splitlines()
+    ]
+    assert [row["event"] for row in rows].count("parent_last_media_received") == 2
+    assert rows[-1]["event"] == "parent_connection_lost"
+    summary = json.loads((tmp_path / "rate-limited" / "summary.json").read_text())
+    assert summary["diagnostic_events_truncated"] is False
+
+
+def test_heartbeat_thread_continues_during_per_frame_event_storm(tmp_path, monkeypatch):
+    import time
+
+    import soop_grid.diagnostics as diagnostics_module
+
+    monkeypatch.setattr(diagnostics_module, "HEARTBEAT_INTERVAL_SECONDS", 0.01)
+    d = Diagnostics(tmp_path / "heartbeat-under-load", lambda: {"video_frames": 1000})
+    d.start()
+    stop = threading.Event()
+
+    def report_media_progress():
+        while not stop.is_set():
+            d.event("parent", "parent_last_media_received")
+
+    producer = threading.Thread(target=report_media_progress)
+    producer.start()
+    time.sleep(0.05)
+    stop.set()
+    producer.join(1)
+    assert not producer.is_alive()
+    d.close()
+
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "heartbeat-under-load" / "events.jsonl").read_text().splitlines()
+    ]
+    assert [row["event"] for row in rows].count("parent_last_media_received") == 1
+    assert [row["event"] for row in rows].count("heartbeat") >= 2
+    assert (
+        json.loads((tmp_path / "heartbeat-under-load" / "summary.json").read_text())[
+            "diagnostic_events_truncated"
+        ]
+        is False
+    )
 
 
 def test_recovery_events_and_last_transient_error_are_not_dropped(tmp_path):
@@ -140,7 +347,12 @@ def test_unexpected_worker_exit_is_not_normal_eof(tmp_path, exception):
 
 def test_cleanup_failure_does_not_replace_parser_failure(monkeypatch):
     cleared = []
-    session = SimpleNamespace(center=None, bno=12345, clear=lambda: cleared.append("session"))
+    session = SimpleNamespace(
+        center=None,
+        bno=12345,
+        clear_gateway_auth=lambda: cleared.append("gateway_auth"),
+        clear=lambda: cleared.append("session"),
+    )
     credentials = SimpleNamespace(clear=lambda: cleared.append("credentials"))
     sink = SimpleNamespace(stats={}, close=lambda: (_ for _ in ()).throw(OSError(errno.ENOSPC, "secret")))
     monkeypatch.setattr(stream_module, "bootstrap", lambda *a, **k: session)
@@ -152,7 +364,7 @@ def test_cleanup_failure_does_not_replace_parser_failure(monkeypatch):
     )
     with pytest.raises(GridError, match="media_header_short"):
         receive(Config("fixture_channel", "12345"), Network(), lambda x: None, lambda x: None, {})
-    assert cleared == ["credentials", "session"]
+    assert cleared == ["gateway_auth", "credentials", "session"]
 
 
 def test_process_supervisor_reads_stdout_and_stderr_without_secrets(tmp_path):

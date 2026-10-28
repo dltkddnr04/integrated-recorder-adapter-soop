@@ -44,3 +44,60 @@ def test_valid_login_and_delimiter_injection():
     validate_login(Frame(0x3E2, bytes(111)))
     with pytest.raises(GridError):
         login_packet("0" * 32, "fixture\x12cookie", "fixture_channel")
+
+
+@pytest.mark.parametrize("broadcaster", ["a" * 26, "bad/channel", None])
+def test_certificate_target_must_fit_wire_field(broadcaster):
+    with pytest.raises(GridError, match="certificate_fields_invalid"):
+        certificate_packet(12345, broadcaster, "123", b"ticket")
+
+
+@pytest.mark.parametrize("category", [True, 1.5, "1.5"])
+def test_certificate_category_must_be_uint(category):
+    with pytest.raises(GridError, match="certificate_fields_invalid"):
+        certificate_packet(12345, "fixture_channel", category, b"ticket")
+
+
+@pytest.mark.parametrize("cookie", ["", None, "fixture\r\nsecret"])
+def test_login_cookie_schema(cookie):
+    with pytest.raises(GridError, match="login_fields_invalid"):
+        login_packet("0" * 32, cookie, "fixture_channel")
+
+
+def test_gateway_receive_honors_network_budget_and_releases_socket(monkeypatch):
+    from types import SimpleNamespace
+    import soop_grid.gateway as gateway
+
+    class Net:
+        released = False
+
+        def connect(self, address):
+            return object()
+
+        def send(self, *args):
+            pass
+
+        def remaining(self, maximum):
+            assert maximum == 4
+            return 0.125
+
+        def release(self, sock):
+            self.released = True
+
+    def read(sock, family, timeout):
+        assert family == "gateway" and timeout == 0.125
+        raise GridError("capture_deadline_reached")
+
+    monkeypatch.setattr(gateway, "read_frame", read)
+    session = SimpleNamespace(
+        gateway=("8.8.8.8", 1),
+        cookie="fixture",
+        broadcaster="fixture_channel",
+        bno=12345,
+        category="123",
+        ticket=b"ticket",
+    )
+    net = Net()
+    with pytest.raises(GridError, match="deadline"):
+        gateway.obtain_certificate(net, session, lambda _: None)
+    assert net.released

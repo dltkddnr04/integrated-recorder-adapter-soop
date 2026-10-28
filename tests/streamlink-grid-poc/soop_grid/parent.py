@@ -3,6 +3,7 @@
 """Receive-only Parent control flow matching Go iss/parent.go."""
 
 import json
+import math
 import struct
 import time
 from dataclasses import dataclass
@@ -31,8 +32,19 @@ def parse_parents(body):
     size = struct.unpack_from("<I", body)[0]
     if size > len(body) - 4:
         raise GridError("parent_list_length")
+    if any(body[4 + size :]):
+        raise GridError("parent_list_trailing_data")
+
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError
+            result[key] = value
+        return result
+
     try:
-        data = json.loads(body[4 : 4 + size].rstrip(b"\0"))
+        data = json.loads(body[4 : 4 + size].rstrip(b"\0"), object_pairs_hook=unique_object)
         items = data["list"]
         if not isinstance(items, list) or not 1 <= len(items) <= 8:
             raise ValueError
@@ -78,11 +90,39 @@ TRANSIENT = {
 }
 
 
+def _is_media_validation_error(error):
+    """True only for fixed media/codec validation codes, never sink failures."""
+    code = str(error)
+    return code.startswith(
+        (
+            "h264_",
+            "aac_",
+            "adts_",
+            "audio_timestamp_",
+            "audio_chunk_",
+            "grid_video_",
+            "media_header_",
+            "media_kind_",
+            "media_layout_",
+            "media_dts_",
+            "media_pts_",
+            "media_timestamp_",
+            "sps_",
+            "video_prefix_",
+        )
+    )
+
+
 def receive_media(
     network, parents, bno, node_key, sink, report, duration=None, max_bytes=None, rediscover=None
 ):
-    if duration is not None and (type(duration) not in (int, float) or duration <= 0):
-        raise GridError("capture_limits_invalid")
+    if duration is not None:
+        try:
+            valid_duration = type(duration) in (int, float) and duration > 0 and math.isfinite(duration)
+        except OverflowError:
+            valid_duration = False
+        if not valid_duration:
+            raise GridError("capture_limits_invalid")
     if max_bytes is not None and (type(max_bytes) is not int or max_bytes <= 0):
         raise GridError("capture_limits_invalid")
     # One capture budget, including connect/backoff/rediscovery. Never reset on failover.
@@ -137,7 +177,21 @@ def receive_media(
             # Expired/denied certificates are terminal, never forged/refreshed implicitly.
             try:
                 queue, node_key = rediscover()
-            except GridError:
+            except Cancelled:
+                raise
+            except GridError as exc:
+                if network.stop.is_set():
+                    raise Cancelled("receiver_closed") from None
+                if (
+                    str(exc) in ("network_read_timeout", "capture_deadline_reached")
+                    and deadline is not None
+                    and time.monotonic() >= deadline
+                ):
+                    if continuity.recovering:
+                        continuity.reject("recovery_deadline_exhausted")
+                    stats["stop_reason"] = "duration_limit"
+                    report("grid_duration_limit_reached")
+                    return
                 stats["center_rediscovery_failed"] = 1
                 stats["center_rediscovery_ms"] = round((time.monotonic() - rediscovery_start) * 1000, 3)
                 stats["recovery_failure_code"] = "center_rediscovery_failed"
@@ -303,10 +357,10 @@ def receive_media(
                         return
                     try:
                         chunk = parse_media(frame.body)
-                    except GridError:
+                    except GridError as exc:
                         stats.update(layout_facts(frame.body))
                         if hasattr(sink, "reject"):
-                            sink.reject(frame)
+                            sink.reject(frame, rejection_code=str(exc))
                         report("media_packet_rejected")
                         raise
                     accepted = continuity.accept(chunk)
@@ -318,7 +372,17 @@ def receive_media(
                             (time.monotonic() - overlap_started) * 1000, 3
                         )
                         report("overlap_frame_verified")
-                    sink.add(frame, discard=not accepted) if not accepted else sink.add(frame)
+                    try:
+                        sink.add(frame, discard=not accepted) if not accepted else sink.add(frame)
+                    except GridError as exc:
+                        # Preserve the first packet rejected after media-layout
+                        # parsing (for example, an H.264 timing conflict) only
+                        # when the explicit private-capture sink is enabled.
+                        if _is_media_validation_error(exc):
+                            if hasattr(sink, "reject"):
+                                sink.reject(frame, rejection_code=str(exc), wire_already_captured=True)
+                            report("media_packet_rejected")
+                        raise
                     last_media_at = time.monotonic()
                     stats["last_media_monotonic"] = last_media_at
                     report("parent_last_media_received")
@@ -354,7 +418,9 @@ def receive_media(
                             stats["catchup_state"] = "unverified_live_boundary"
                         quality = parent.quality
                         cache_start = chunk.frame + 1
-                    last_media = time.monotonic()
+                        # Only newly committed media proves forward progress.
+                        # Replayed overlap must not keep a stalled peer alive.
+                        last_media = time.monotonic()
                     if stats["media_packets"] == 1:
                         report("parent_c748_media_received")
                 if time.monotonic() - last_media >= MEDIA_STALL_TIMEOUT:

@@ -54,7 +54,7 @@ When omitted, the transport option defaults to `auto`, which tries Native Grid f
 
 ## Key limitations
 
-- Experimental/Beta. A 30-minute endurance test and repeated long-term validation of naturally occurring remote failures have not been completed.
+- Experimental/Beta. The latest bundle, `400f028e…`, completed a 30-minute Grid-only recording and passed full H.264/AAC decode plus TS/timestamp checks; that run contained no B pictures. A separate 30-minute run using an earlier bundle contained B pictures and passed full-file checks, but it is not represented as a same-build test. A separate HRD/POC presentation-order conflict remains fail-closed. Perceptual A/V sync, all codec/broadcast combinations, and repeated long-duration natural failures remain unverified. See the [latest 30-minute report](docs/LIVE_VALIDATION_30M_20261028.md) and [timeline analysis](docs/TIMELINE_MODEL_FIELD_VALIDATION_20261028.md).
 - A roughly 600-second recording and three Cache-assisted recoveries after client-side Parent socket closes in one session were verified in controlled experiments. This does not guarantee lossless recovery from every failure.
 - Automatic account reauthentication, reliable classification of broadcast end versus network failure, and automatic broadcast-number changes are not supported.
 - Support is limited to validated subsets of H.264 timing/POC structures and ADTS AAC. Multi-Parent simultaneous reception is not supported.
@@ -64,7 +64,7 @@ When omitted, the transport option defaults to `auto`, which tries Native Grid f
 - Windows/macOS runtime, all broadcast conditions, and long-run A/V drift have not been verified.
 - For authenticated broadcasts, use `--soop-grid-username` and `--soop-grid-password`, or `SOOP_ACCOUNT_ID` / `SOOP_ACCOUNT_PASSWORD`. Streamlink's built-in `--soop-username` / `--soop-password` options are not passed to the external plugin. The broadcast password is separate: `--soop-grid-stream-password` or `SOOP_STREAM_PASSWORD`.
 
-See [limitations](docs/LIMITATIONS.md), the [pre-release static audit](docs/PRE_RELEASE_STATIC_AUDIT.md), and [live failover validation](docs/LIVE_FAILOVER_VALIDATION.md) for the evidence and boundaries.
+See [limitations](docs/LIMITATIONS.md), the [pre-release static audit](docs/PRE_RELEASE_STATIC_AUDIT.md), [live failover validation](docs/LIVE_FAILOVER_VALIDATION.md), and [comprehensive hardening and field validation](docs/COMPREHENSIVE_HARDENING.md) for evidence and boundaries.
 
 ## Documentation and source
 
@@ -72,6 +72,7 @@ See [limitations](docs/LIMITATIONS.md), the [pre-release static audit](docs/PRE_
 - [Single-file installation and build](docs/SINGLEFILE.md)
 - [Authentication option compatibility and limitations](docs/AUTH_COMPATIBILITY.md)
 - [Architecture and protocol](docs/ARCHITECTURE.md)
+- [H.264 timing diagnosis and supported subset](docs/H264_TIMING_DIAGNOSIS.md)
 - [Recovery policy](docs/RELIABILITY.md)
 - [Validation history and scope](docs/VALIDATION.md)
 - [Research reports](docs/): failover, Multi-Parent, Cache-range analysis, and more

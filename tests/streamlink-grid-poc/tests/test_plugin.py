@@ -113,7 +113,7 @@ def test_cli_debug_enumeration_does_not_log_secret_environment_values(tmp_path):
     assert "fixture-private-password" not in output and "fixture-only" not in output
 
 
-def test_secrets_are_not_serialized_and_consumed_from_environment(monkeypatch):
+def test_secrets_are_not_serialized_and_environment_credentials_remain_available(monkeypatch):
     monkeypatch.setenv("SOOP_ACCOUNT_ID", "fixture_account")
     monkeypatch.setenv("SOOP_ACCOUNT_PASSWORD", "fixture-private-password")
     monkeypatch.setenv("SOOP_STREAM_PASSWORD", "fixture-only")
@@ -122,9 +122,14 @@ def test_secrets_are_not_serialized_and_consumed_from_environment(monkeypatch):
     _, cls, url = session.resolve_url("https://play.sooplive.com/fixture_channel/12345")
     stream = cls(session, url).streams()["original"]
     assert stream.grid.config.account_password == "fixture-private-password"
-    assert "SOOP_ACCOUNT_PASSWORD" not in os.environ and "SOOP_STREAM_PASSWORD" not in os.environ
+    assert os.environ["SOOP_ACCOUNT_PASSWORD"] == "fixture-private-password"
+    assert os.environ["SOOP_STREAM_PASSWORD"] == "fixture-only"
+    second = cls(session, url).streams()["original"]
+    assert second.grid.config.account_password == "fixture-private-password"
+    assert second.grid.config.stream_password == "fixture-only"
     assert "fixture" not in repr(stream) and "fixture" not in stream.json
     stream.grid.config.clear()
+    second.grid.config.clear()
 
 
 @pytest.mark.parametrize(
@@ -152,7 +157,8 @@ def test_external_credentials_cli_precedes_environment(monkeypatch, options, env
     cls = session.resolve_url(url)[1]
     stream = cls(session, url, options=options).streams()["original"]
     assert (stream.grid.config.account, stream.grid.config.account_password) == expected
-    assert "SOOP_ACCOUNT_PASSWORD" not in os.environ
+    if "SOOP_ACCOUNT_PASSWORD" in environment:
+        assert os.environ["SOOP_ACCOUNT_PASSWORD"] == environment["SOOP_ACCOUNT_PASSWORD"]
     stream.grid.config.clear()
 
 
@@ -167,7 +173,7 @@ def test_external_username_password_must_be_a_pair_and_conflicting_aliases_fail(
         cls(session, url, options={"grid-username": "one", "grid-account": "two"}).streams()
 
 
-def test_stream_password_cli_precedes_environment_and_is_cleared(monkeypatch):
+def test_stream_password_cli_precedes_environment_without_mutating_environment(monkeypatch):
     monkeypatch.setenv("SOOP_STREAM_PASSWORD", "environment-pass")
     monkeypatch.setenv("SOOP_ACCOUNT_ID", "fixture_user")
     monkeypatch.setenv("SOOP_ACCOUNT_PASSWORD", "fixture-pass")
@@ -185,7 +191,7 @@ def test_stream_password_cli_precedes_environment_and_is_cleared(monkeypatch):
         },
     ).streams()["original"]
     assert stream.grid.config.stream_password == "cli-pass"
-    assert "SOOP_STREAM_PASSWORD" not in os.environ
+    assert os.environ["SOOP_STREAM_PASSWORD"] == "environment-pass"
     stream.grid.config.clear()
 
 
@@ -293,3 +299,13 @@ def test_official_streamlink_python_sources_match_wheel_record():
             assert actual == f.hash.value, str(f)
             verified += 1
     assert verified > 100
+
+
+@pytest.mark.parametrize("host", ["play.sooplive.com", "play.sooplive.co.kr", "play.afreecatv.com"])
+def test_grid_referer_canonicalizes_advertised_aliases(host):
+    session = Streamlink()
+    session.plugins.load_path(str(ROOT / "plugins"))
+    url = f"https://{host}/fixture_channel/12345?unused=1#player"
+    cls = session.resolve_url(url)[1]
+    stream = cls(session, url, options={"transport": "grid"}).streams()["original"]
+    assert stream.config.referer == "https://play.sooplive.com/fixture_channel/12345"

@@ -200,7 +200,7 @@ ffmpeg -v warning -xerror -i recording.ts \
 
 ## 10. 지원 범위와 알려진 제약
 
-- 프로젝트는 Experimental/Beta이며 30분 이상 내구성 시험은 완료되지 않았습니다.
+- 프로젝트는 Experimental/Beta입니다. 최신 `400f028e…` 번들로 30분 Grid-only 녹화를 완료하고 전체 H.264/AAC 디코딩과 TS·타임스탬프 검사를 통과했습니다. 해당 방송은 B-frame이 없었습니다. 이전 번들의 별도 30분 녹화에서는 B-frame이 포함된 스트림의 재정렬을 검증했지만, 이를 최신 번들의 동일 빌드 실증으로 표현하지 않습니다. 별도의 HRD/POC 순서 충돌은 안전하게 거부되며, 지각적 A/V 동기와 반복적인 자연 장애 복구는 입증되지 않았습니다. 상세 수치는 [최신 30분 검증 보고서](LIVE_VALIDATION_30M_20261028.md)와 [시간축 분석](TIMELINE_MODEL_FIELD_VALIDATION_20261028.md)을 참고하세요.
 - 약 600초 실제 녹화에서 1080p60 H.264/AAC 전체 디코딩을 확인했습니다. 이는 모든 방송의 해상도·프레임률 보장이 아닙니다.
 - 별도의 한 세션에서 클라이언트가 소유한 Parent TCP 소켓을 세 차례 닫고, 서로 다른 Parent Endpoint로 재연결하여 매번 Cache Overlap의 SHA-256 일치와 출력 연속성을 확인했습니다. 자연 발생 원격 장애의 장기간 반복 검증이나 독립 장애 도메인을 보장하지 않습니다.
 - 복구는 단일 활성 Parent를 사용합니다. Multi-Parent 동시 수신은 지원하지 않습니다.
@@ -208,12 +208,13 @@ ffmpeg -v warning -xerror -i recording.ts \
 - 미디어가 3초 동안 도착하지 않으면 정체로 판정해 복구를 시도할 수 있습니다. 정상적인 긴 정체 구간에서도 재연결이 발생할 수 있습니다.
 - 자동 세션 재인증, 방송 종료와 네트워크 장애의 완전한 구분, 방송 전환 및 장시간 A/V drift는 검증되지 않았습니다.
 - 기존 내장 플러그인의 `--soop-username`, `--soop-password`, `--soop-stream-password`는 외부 `soop_grid`에 전달되지 않습니다. 외부 플러그인에서는 대응하는 `--soop-grid-*` 옵션 또는 환경변수를 사용하세요.
-- 일부 progressive Annex-B H.264 timing/POC 구조와 ADTS AAC만 지원합니다. 다중 Parent, 모든 코덱, 모든 방송 조건을 지원하지 않습니다.
-- 선택적 원본 진단 캡처는 디스크 사용량이 커지고 미디어 패킷마다 동기식 기록을 할 수 있습니다. 일반 녹화에서는 활성화하지 않는 것을 권장합니다.
+- 일부 progressive Annex-B H.264 timing/POC 구조와 ADTS AAC만 지원합니다. POC 값의 차이를 시간으로 간주하지 않습니다. 재정렬 영상에는 일관된 HRD/Picture Timing과 POC가 필요합니다. 보존된 36.8초 Grid B-frame 캡처 한 건은 현재 소스에서 성공적으로 재생했지만 장시간 실방송 검증은 아닙니다. 첫 HRD/POC 충돌이 고정 VUI·POC type 2의 IDR/P 순서에서 관측되면 제한적으로 Grid 시계 기반 no-reorder 모드를 선택하고, 이후 B-frame 또는 POC 역행은 오류로 처리합니다. 이는 공식 Grid 시계 의미를 증명하지 않으며, 현재 성인 방송의 동일한 조합은 다시 실방송 검증되지 않았습니다. 다른 타이밍 모순이나 불확실성은 계속 fail-closed이며 HLS로 우회하지 않습니다. 다중 Parent, 모든 코덱, 모든 방송 조건을 지원하지 않습니다.
+- 선택적 진단 JSONL은 최대 16 MiB이며, 한도에 도달하면 이벤트 기록을 중단하고 요약에 잘림 여부를 표시합니다. 진단 캡처는 수신 스레드에 직렬화·파일 기록 부담을 추가하므로 문제 재현에 필요한 경우에만 사용하세요.
+- Native Grid의 Gateway/Center/Parent 연결은 SOOP 프로토콜의 일반 TCP를 사용하며 플러그인이 TLS를 추가하지 않습니다. 일부 인증 관련 값이 프로토콜 패킷에 포함되므로 신뢰할 수 있는 네트워크에서만 사용하세요. HTTPS Bootstrap과 Native Grid TCP 연결의 전송 보안은 서로 다릅니다.
 - Linux에서만 직접 실행을 확인했습니다. Windows/macOS 및 다른 Streamlink/Python 조합은 미검증입니다.
 - 시청·저장 권한 및 서비스 이용 조건을 준수하세요. 코드는 AGPL-3.0-only입니다.
 
-검증 이력은 [실제 제어 장애 검증](LIVE_FAILOVER_VALIDATION.md), [정적 감사](PRE_RELEASE_STATIC_AUDIT.md), [전체 검증 기록](VALIDATION.md)에서 확인할 수 있습니다.
+검증 이력은 [종합 강화·현장 검증](COMPREHENSIVE_HARDENING.md), [실제 제어 장애 검증](LIVE_FAILOVER_VALIDATION.md), [정적 감사](PRE_RELEASE_STATIC_AUDIT.md), [전체 검증 기록](VALIDATION.md)에서 확인할 수 있습니다.
 
 ### 검증 문서의 범위
 
@@ -223,4 +224,4 @@ ffmpeg -v warning -xerror -i recording.ts \
 - [Failover 최적화 보고서](FAST_FAILOVER_OPTIMIZATION.md)는 구현 과정과 합성 벤치마크, 당시의 상태를 기록합니다. 실제 장애 복구의 최신 증거는 위 제어 장애 보고서를 기준으로 합니다.
 - [Multi-Parent 조사](MULTIPARENT_PROTOCOL_FEASIBILITY.md)는 동일한 서버 제공 Endpoint의 동시 연결·프레임 비교를 다룹니다. 서로 다른 Parent 간 Active-Active 지원을 입증하지 않습니다.
 - [Cache 범위 REA 분석](GRID_CACHE_RANGE_REA.md)은 분석된 네이티브 클라이언트의 Cache 명령 구조와 종료 제어 한계를 설명합니다. 이 기능은 일반 사용자 옵션이 아닙니다.
-- [아키텍처](ARCHITECTURE.md), [복구 정책](RELIABILITY.md), [제한사항](LIMITATIONS.md)은 현재 설계와 지원 경계를 설명합니다. [진단 문서](DIAGNOSTICS.md)는 선택형 진단 파일의 내용·개인정보 위험을 다룹니다.
+- [아키텍처](ARCHITECTURE.md), [복구 정책](RELIABILITY.md), [제한사항](LIMITATIONS.md)은 현재 설계와 지원 경계를 설명합니다. [H.264 타이밍 진단](H264_TIMING_DIAGNOSIS.md)은 지원되는 POC/타이밍 조합과 안전한 거부 조건을 다룹니다. [진단 문서](DIAGNOSTICS.md)는 선택형 진단 파일의 내용·개인정보 위험을 다룹니다.

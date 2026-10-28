@@ -1,5 +1,11 @@
 # Production-readiness implementation result — 2026-10-25
 
+> **2026-10-26 follow-up:** timing descriptions below are historical. The current
+> implementation no longer converts POC distance to time. See
+> [H264_TIMING_DIAGNOSIS.md](H264_TIMING_DIAGNOSIS.md) and
+> [COMPREHENSIVE_HARDENING.md](COMPREHENSIVE_HARDENING.md) for corrected support
+> boundaries, independent regressions, and current-artifact measurements.
+
 This revision updates `tests/streamlink-grid-poc/` without changing the Go Grid PoC,
 the production Source Adapter, Integrated Recorder Core, or Streamlink itself. It is
 still classified as **Experimental/Beta**, not stable long-recording software.
@@ -24,11 +30,12 @@ unchanged. See [SINGLEFILE.md](SINGLEFILE.md).
   channel/BNO against Live metadata and requires a normal positive Watch response.
   Explicit restrictions and unknown/malformed required fields fail closed. It does
   not search for or switch to another broadcast.
-- Video TS PES packets now carry both PTS and DTS. DTS comes from the observed Grid
-  decode-order timestamp; presentation order comes from H.264 POC and fixed VUI
-  timing. PCR follows DTS. Internal timestamps remain unwrapped; 33-bit wire fields
-  wrap as specified. Unsupported/interlaced/ambiguous H.264 timing layouts fail
-  closed. This is a tested supported subset, not a universal H.264 parser.
+- Video TS PES packets carry both PTS and DTS. DTS comes from the observed Grid
+  decode-order timestamp. POC types 0/1/2 are parsed; fixed VUI timing maps reordered
+  pictures to PTS. When observed POC remains ordered, Grid time supplies both PTS
+  and DTS; reordered pictures without fixed VUI timing fail closed. PCR follows DTS.
+  Internal timestamps remain unwrapped; 33-bit wire fields wrap as specified. This
+  remains a supported subset, not a universal H.264 parser.
 - Synthetic B-frame H.264/AAC TS passes FFmpeg 9 full decode with `-xerror`, monotonic
   DTS, PTS reordering, PTS≥DTS, and closely aligned synthetic stream start times.
   A preserved historical private Grid capture also passed the new complete decode

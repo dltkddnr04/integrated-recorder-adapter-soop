@@ -1,5 +1,15 @@
 # SOOP Native Grid Pre-Release Static Audit
 
+> **2026-10-26 follow-up:** timing descriptions below are historical. The current
+> implementation no longer converts POC distance to time. See
+> [H264_TIMING_DIAGNOSIS.md](H264_TIMING_DIAGNOSIS.md) and
+> [COMPREHENSIVE_HARDENING.md](COMPREHENSIVE_HARDENING.md) for corrected support
+> boundaries, independent regressions, and current-artifact measurements.
+
+**Historical snapshot:** this audit predates the H.264 POC 0/1/2 timing update.
+For current parser behavior and the remaining no-VUI/B-frame limitation, see
+[`H264_TIMING_DIAGNOSIS.md`](H264_TIMING_DIAGNOSIS.md).
+
 **Audit date:** 2026-10-25 UTC
 **Audited HEAD:** `8b31e14120b5d9b09f48e9721a1ae5c229da8abe`
 **Scope:** `tests/streamlink-grid-poc/`, including modular Python sources, tests,
@@ -20,12 +30,11 @@ No BLOCKER or code-level MAJOR issue was found in the audited Grid receive path,
 failover integrity checks, Streamlink integration, or single-file distribution.
 Offline tests and the clean Streamlink sideload check passed.
 
-One MINOR operational issue was identified: if opt-in diagnostics are enabled,
-`parent_last_media_received` is written and flushed for every media packet. This
-makes diagnostic disk use and synchronous diagnostic I/O proportional to media
-packet count. The default capture path does not enable diagnostics. The limitation
-is documented in [DIAGNOSTICS.md](DIAGNOSTICS.md) and the community guide; the
-diagnostic write behavior was not changed in this static-audit-only task.
+The original audit identified an unbounded opt-in diagnostic JSONL log. The
+current hardening follow-up caps event logs at 16 MiB and batches flushes; final
+summaries remain atomically written. The detailed findings below describe the
+original audit revision and are retained as historical evidence, not current
+logger behavior. See `COMPREHENSIVE_HARDENING.md` for current changes and tests.
 
 The 3-second media-stall detector can also classify a legitimate interval without
 media as a transient Parent failure. Recovery still has bounded attempts and strict
@@ -45,16 +54,14 @@ None found.
 
 ### MINOR
 
-1. **Opt-in diagnostics scale with media packet count.**
+1. **Historical: opt-in diagnostics scaled with media packet count.**
    [`parent.py`](../soop_grid/parent.py#L317) reports a media event for each
    received `0xC748` chunk. [`stream.py`](../soop_grid/stream.py#L176) forwards
    it, and [`diagnostics.py`](../soop_grid/diagnostics.py#L238) serializes and
-   flushes each event. Thus `events.jsonl` is unbounded with recording duration
-   when diagnostics are enabled, and each media packet adds synchronous file I/O.
-   This is not an unbounded in-memory queue and does not affect the normal
-   diagnostics-disabled path. Mitigation: keep diagnostics disabled for routine
-   long captures or monitor free disk while collecting them. The user-facing
-   diagnostic documentation now states this explicitly.
+   had flushed each event and allowed `events.jsonl` to grow with recording
+   duration. The current logger caps this file at 16 MiB, batches flushes, and
+   reports truncation in its final summary. It still performs bounded synchronous
+   serialization and writes while diagnostics are enabled.
 
 2. **Stall detection is intentionally aggressive.**
    [`parent.py`](../soop_grid/parent.py#L15) sets `MEDIA_STALL_TIMEOUT = 3.0`;
@@ -168,7 +175,7 @@ None found.
 
 Environment: Linux x86-64, Python 3.12.3, Streamlink 8.6.2, PyCryptodome 3.24.1,
 FFmpeg/FFprobe n9.0.2-35-g9a9b70bb8c-20261023. The clean sideload subprocess used
-`/tmp/soop-grid-clean-venv`, with no project package and no `PYTHONPATH`.
+`temporary local validation output/soop-grid-clean-venv`, with no project package and no `PYTHONPATH`.
 Loopback tests require local socket permission; the sandbox-denied first attempt was
 rerun with that permission. No test connected to SOOP.
 

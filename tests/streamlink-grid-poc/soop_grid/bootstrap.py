@@ -3,9 +3,10 @@
 """Exact-target public Watch or authenticated desktop TK/FTK bootstrap."""
 
 import re
+import math
 from dataclasses import dataclass, field
 
-from .auth import HTTP, LIVE, PLAY, identifier
+from .auth import HTTP, LIVE, PLAY, destination, identifier
 from .protocol import GridError, endpoint
 
 
@@ -25,9 +26,13 @@ class Config:
     user_agent: str | None = field(default=None, repr=False)
 
     def validate(self):
-        if not identifier(self.broadcaster) or (
-            self.bno is not None
-            and (not isinstance(self.bno, str) or not re.fullmatch(r"[0-9]{1,10}", self.bno))
+        if (
+            not identifier(self.broadcaster)
+            or len(self.broadcaster) > 25
+            or (
+                self.bno is not None
+                and (not isinstance(self.bno, str) or not re.fullmatch(r"[0-9]{1,10}", self.bno))
+            )
         ):
             raise GridError("broadcast_target_invalid")
         self.broadcaster = self.broadcaster.lower()
@@ -35,10 +40,29 @@ class Config:
             if not 0 < int(self.bno) <= 0xFFFFFFFF:
                 raise GridError("broadcast_number_bounds")
             self.bno = str(int(self.bno))
-        if self.duration is not None and (type(self.duration) not in (int, float) or self.duration <= 0):
+        if self.duration is not None and (
+            type(self.duration) not in (int, float) or not 0 < self.duration < math.inf
+        ):
             raise GridError("capture_duration_bounds")
         if self.max_bytes is not None and (type(self.max_bytes) is not int or self.max_bytes <= 0):
             raise GridError("capture_byte_limit_bounds")
+        if (
+            not all(isinstance(x, str) for x in (self.account, self.account_password, self.stream_password))
+            or type(self.require_adult) is not bool
+            or self.account
+            and not identifier(self.account)
+            or len(self.account_password) > 1024
+            or "\0" in self.account_password
+        ):
+            raise GridError("account_input_invalid")
+        if self.referer is not None and destination(self.referer).hostname != "play.sooplive.com":
+            raise GridError("http_destination_invalid")
+        if self.user_agent is not None and (
+            not isinstance(self.user_agent, str)
+            or not 0 < len(self.user_agent) <= 1024
+            or any(ord(c) < 32 or ord(c) > 126 for c in self.user_agent)
+        ):
+            raise GridError("user_agent_invalid")
         if (
             bool(self.account) != bool(self.account_password)
             or (self.require_adult or self.stream_password)
@@ -70,15 +94,30 @@ class Session:
         self.cookie = ""
         self.ticket = self.stream_password = b""
 
+    def clear_gateway_auth(self):
+        """Drop bootstrap credentials after the Gateway certificate is issued."""
+        self.cookie = ""
+        self.ticket = self.stream_password = b""
+
 
 def affirmative_no(value):
-    return str(value).upper() in ("N", "0", "FALSE")
+    return type(value) in (str, int, bool) and str(value).upper() in ("N", "0", "FALSE")
+
+
+def server_endpoint(host, port):
+    # endpoint() also accepts integer IPs and coerces floats/bools to ports.
+    if not isinstance(host, str) or not (
+        type(port) is int or isinstance(port, str) and re.fullmatch(r"[0-9]{1,5}", port)
+    ):
+        raise GridError("invalid_server_endpoint")
+    return endpoint(host, port)
 
 
 def bootstrap(config, report, http_factory=HTTP):
-    config.validate()
-    http = http_factory()
+    http = None
     try:
+        config.validate()
+        http = http_factory()
         if config.account:
             if config.user_agent and hasattr(http, "session"):
                 http.session.headers["User-Agent"] = config.user_agent
@@ -87,10 +126,10 @@ def bootstrap(config, report, http_factory=HTTP):
         bno = config.bno
         if not bno:
             page = http.request("GET", PLAY + "/" + config.broadcaster).decode("utf-8", "replace")
-            match = re.search(r"window\.nBroadNo\s*=\s*([0-9]+);", page)
+            match = re.search(r"window\.nBroadNo\s*=\s*([0-9]{1,10});", page)
             if not match:
                 raise GridError("channel_live_number_unavailable")
-            bno = match[1]
+            bno = str(int(match[1]))
         if not 0 < int(bno) <= 0xFFFFFFFF:
             raise GridError("broadcast_number_bounds")
         channel = http.json(
@@ -128,8 +167,8 @@ def bootstrap(config, report, http_factory=HTTP):
             for name in ("subscription_only", "SUBSCRIPTION_ONLY", "ISPAID", "PAID"):
                 if name in channel and not affirmative_no(channel[name]):
                     raise GridError("public_policy_restricted_or_unknown")
-        gate = endpoint(channel.get("GWIP"), channel.get("GWPT"))
-        center = endpoint(channel.get("CTIP"), channel.get("CTPT"))
+        gate = server_endpoint(channel.get("GWIP"), channel.get("GWPT"))
+        center = server_endpoint(channel.get("CTIP"), channel.get("CTPT"))
         if config.account:
             cookie = channel.get("TK") or http.cookie("AuthTicket")
             ticket = channel.get("FTK")
@@ -137,6 +176,12 @@ def bootstrap(config, report, http_factory=HTTP):
         else:
             http.request("GET", PLAY + "/" + config.broadcaster)
             cookie = http.cookie("_au")
+            if (
+                not isinstance(cookie, str)
+                or not 0 < len(cookie) <= 4096
+                or any(ord(c) < 33 or ord(c) > 126 or c in ';,\\"' for c in cookie)
+            ):
+                raise GridError("gateway_cookie_missing_or_invalid")
             headers = {"Cookie": "_au=" + cookie} if cookie else {}
             root = http.json(
                 "POST",
@@ -153,13 +198,13 @@ def bootstrap(config, report, http_factory=HTTP):
                 if name in data and str(data[name]).lower() != expected.lower():
                     raise GridError("watch_target_changed")
             ticket = data.get("fan_ticket")
-            gate = endpoint(data.get("gateway_ip"), data.get("gateway_port"))
-            center = endpoint(data.get("relay_ip"), data.get("relay_port"))
+            gate = server_endpoint(data.get("gateway_ip"), data.get("gateway_port"))
+            center = server_endpoint(data.get("relay_ip"), data.get("relay_port"))
             report("public_watch_ticket_received")
         if (
             not isinstance(cookie, str)
             or not 0 < len(cookie) <= 4096
-            or any(c in cookie for c in "\0\x11\x12\r\n")
+            or any(ord(c) < 32 or ord(c) == 127 for c in cookie)
         ):
             raise GridError("gateway_cookie_missing_or_invalid")
         if not isinstance(ticket, str) or not 0 < len(ticket.encode()) <= 4096:
@@ -178,4 +223,5 @@ def bootstrap(config, report, http_factory=HTTP):
         raise GridError("bootstrap_schema_invalid") from None
     finally:
         config.clear()
-        http.close()
+        if http is not None:
+            http.close()

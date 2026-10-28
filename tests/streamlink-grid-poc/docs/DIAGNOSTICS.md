@@ -19,32 +19,42 @@ Streamlink's normal Python dependencies; the validation tools below are optional
 It records monotonic elapsed time, numeric packet/frame/byte counts, last committed
 frame, last control command, cache request position, active sockets/Parent count,
 buffer occupancy/peak, and last video DTS/PTS. Invalid media packets contribute only
-their numeric body/header/extension/payload sizes. No packet body, URL, endpoint,
-account, Cookie, Ticket, node key, exception message, or traceback is serialized.
+their numeric body/header/extension/payload sizes. No packet body, media payload or
+output SHA-256 fingerprint, URL, endpoint, account, Cookie, Ticket, node key,
+exception message, or traceback is serialized.
 Unknown event/error strings are replaced with fixed generic codes.
 
-Each event is flushed. `summary.json` is written through a temporary file and atomic
-replacement at worker completion and reader close; the file is flushed and fsynced.
-There is no per-frame diagnostic fsync. Sudden process death or storage failure can
-prevent the final summary, so absence of a summary is not evidence of normal EOF.
-The heartbeat thread is stopped and joined on close.
+The event log has a hard 16 MiB limit. Once reached, further event records are
+omitted and `summary.json` reports `diagnostic_events_truncated: true`. Events are
+flushed at least once per second, every 64 records, and for selected lifecycle/error
+events; they are not synchronously flushed per media packet. `summary.json` is
+written through a temporary file and atomic replacement at worker completion and
+reader close; it is flushed and fsynced. Sudden process death or storage failure
+can still prevent the final summary, so absence of a summary is not evidence of
+normal EOF. The heartbeat thread is stopped and joined on close.
 
-The receiver currently emits `parent_last_media_received` for every media packet;
-when diagnostics are enabled this creates and flushes one JSONL record per packet in
-addition to the two-second heartbeat. Diagnostic disk usage and synchronous write
-overhead therefore grow with packet count. For long captures, leave diagnostics
-disabled unless that detailed event stream is needed, and monitor available disk space.
+The receiver emits `parent_last_media_received` for each media packet. Serialization
+and bounded buffered writes therefore add CPU and I/O overhead while diagnostics are
+enabled, but event-log disk use cannot exceed 16 MiB. For routine long captures,
+leave diagnostics disabled unless detailed event timing is needed.
 
 Worker errors are retained while existing output bytes drain. Once the buffer is
 empty the reader raises `OSError`, as Streamlink 8.6.2's output runner requires.
 Startup still uses `StreamError`. A cleanup exception does not replace a prior
 parser/network error. User cancellation discards pending output and closes sockets.
 Diagnostic reason selection retains the first terminal cause, including across close.
+For a Gateway/Center control-header checksum failure, the summary may include the
+protocol family, command/result integers, declared body length, and received versus
+expected checksum integers. It never includes raw header bytes or packet contents.
 
 `duration_limit` and `byte_limit` are explicit local stops. Network EOF, timeout,
 stall, rejected authentication, failed overlap, frame gap, and timestamp rejection
 remain errors. Normal broadcast-end signaling and certificate-expiration signaling
 have not been established; they are not inferred from a disconnected socket.
+An invalid timestamp/order check is reported as `media_timestamp_invalid`; an
+unverified or unsupported clock relationship, including a Grid/HRD conflict, is
+reported separately as `media_timing_unconfirmed`. The latter does not by itself
+claim that the encoded H.264 bitstream is malformed.
 
 ## Private field-test supervisor
 

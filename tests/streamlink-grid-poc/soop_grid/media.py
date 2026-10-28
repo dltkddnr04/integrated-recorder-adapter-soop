@@ -1,16 +1,17 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright (c) 2026 source.soop contributors
-"""Grid chunk boundaries, codec metadata, and optional private raw preservation."""
-
 import hashlib
 import json
 import os
 import struct
-from dataclasses import dataclass, field
-from pathlib import Path
-
+from collections import deque as deque
+from dataclasses import dataclass as dataclass, field as field
+from fractions import Fraction as Fraction
+from pathlib import Path as Path
 from .h264clock import H264Clock
-from .mpegts import TSMux, nals
+from .aac import parse_adts
+from .mpegts import TSMux
+from .mpegts import nals
 from .protocol import GridError
 
 
@@ -39,16 +40,14 @@ def parse_media(body):
         raise GridError("media_header_short")
     header = struct.unpack_from("<H", body, 2)[0]
     extension, size = struct.unpack_from("<II", body, 4)
-    # Live extended I-frame: 69-byte header + 50-byte opaque metadata + Annex-B.
-    # Both lengths are validated before locating the unchanged encoded payload.
     start = header + extension
-    if not 69 <= header <= 4096 or extension > 4096 or size < 1 or start + size != len(body):
+    if not 69 <= header <= 4096 or extension > 4096 or size < 1 or (start + size != len(body)):
         raise GridError("media_layout_unconfirmed")
     kind = chr(body[40])
     if kind not in ("I", "P", "B", "A"):
         raise GridError("media_kind_unconfirmed")
     payload = body[start:]
-    if kind in ("I", "P", "B") and (len(payload) < 4 or payload[:2] != b"\0\0"):
+    if kind in ("I", "P", "B") and (len(payload) < 4 or payload[:2] != b"\x00\x00"):
         raise GridError("video_prefix_unconfirmed")
     if kind == "A" and (len(payload) < 7 or payload[0] != 255 or payload[1] & 240 != 240):
         raise GridError("audio_prefix_unconfirmed")
@@ -67,7 +66,7 @@ class Bits:
             raise GridError("sps_truncated")
         value = 0
         for _ in range(n):
-            value = (value << 1) | ((self.data[self.offset // 8] >> (7 - self.offset % 8)) & 1)
+            value = value << 1 | self.data[self.offset // 8] >> 7 - self.offset % 8 & 1
             self.offset += 1
         return value
 
@@ -100,7 +99,7 @@ def sps_info(payload):
     profile = r.get(8)
     r.get(16)
     r.ue()
-    chroma, separate = 1, 0
+    chroma, separate = (1, 0)
     if profile in (100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135):
         chroma = r.ue()
         if chroma > 3:
@@ -136,7 +135,7 @@ def sps_info(payload):
         raise GridError("sps_poc_invalid")
     r.ue()
     r.get(1)
-    w, h = r.ue() + 1, r.ue() + 1
+    w, h = (r.ue() + 1, r.ue() + 1)
     only = r.get(1)
     if not only:
         r.get(1)
@@ -144,7 +143,7 @@ def sps_info(payload):
     left = right = top = bottom = 0
     if r.get(1):
         left, right, top, bottom = (r.ue() for _ in range(4))
-    subw, subh = (1, 1) if separate or chroma in (0, 3) else ((2, 2) if chroma == 1 else (2, 1))
+    subw, subh = (1, 1) if separate or chroma in (0, 3) else (2, 2) if chroma == 1 else (2, 1)
     width = w * 16 - subw * (left + right)
     height = h * 16 * (2 - only) - subh * (2 - only) * (top + bottom)
     if not 0 < width <= 16384 or not 0 < height <= 16384:
@@ -165,7 +164,7 @@ def sps_info(payload):
             r.ue()
             r.ue()
         if r.get(1):
-            units, scale = r.get(32), r.get(32)
+            units, scale = (r.get(32), r.get(32))
             r.get(1)
             if 0 < units < 1 << 30:
                 info.update(fps_numerator=scale, fps_denominator=2 * units)
@@ -173,17 +172,10 @@ def sps_info(payload):
 
 
 def adts_info(payload):
-    if len(payload) < 7 or payload[0] != 255 or payload[1] & 0xF6 != 0xF0:
-        raise GridError("adts_header_invalid")
-    index = (payload[2] >> 2) & 15
-    rates = (96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350)
-    if index >= len(rates):
-        raise GridError("adts_sample_rate_invalid")
-    return {
-        "codec": "aac",
-        "sample_rate": rates[index],
-        "channels": ((payload[2] & 1) << 2) | (payload[3] >> 6),
-    }
+    parsed = parse_adts(payload)
+    if parsed.config_changed:
+        raise GridError("aac_configuration_changed")
+    return {"codec": "aac", "sample_rate": parsed.config.sample_rate, "channels": parsed.config.channels}
 
 
 class MediaSink:
@@ -191,6 +183,14 @@ class MediaSink:
         self.emit = emit
         self.mux = TSMux()
         self.video_clock = H264Clock()
+        self.audio_config = None
+        self.last_audio_timestamp = None
+        self.last_audio_samples = 0
+        self.audio_origin_timestamp = None
+        self.pending_audio = deque()
+        self.pending_audio_bytes = 0
+        self.pending_video = None
+        self.pending_video_record = None
         self.files = {}
         self.path = Path(capture_dir) if capture_dir else None
         self.owns_directory = False
@@ -201,15 +201,23 @@ class MediaSink:
             "wire_bytes": 0,
             "video_frames": 0,
             "audio_frames": 0,
+            "audio_adts_frames": 0,
+            "audio_access_units": 0,
+            "audio_core_samples": 0,
+            "audio_output_access_units": 0,
+            "audio_output_core_samples": 0,
+            "video_output_frames": 0,
             "sequence_discontinuities": 0,
             "extended_media_packets": 0,
             "media_extension_bytes": 0,
         }
         self.payload_hash = hashlib.sha256()
+        self.video_output_hash = hashlib.sha256()
+        self.audio_output_hash = hashlib.sha256()
         self.last_frame = None
         try:
             if self.path:
-                self.path.mkdir(mode=0o700, parents=False, exist_ok=False)
+                self.path.mkdir(mode=448, parents=False, exist_ok=False)
                 self.owns_directory = True
                 for name in (
                     "grid-wire.bin",
@@ -218,8 +226,9 @@ class MediaSink:
                     "audio.aac",
                     "recording.ts",
                     "frames.jsonl",
+                    "rejected-frames.jsonl",
                 ):
-                    fd = os.open(self.path / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                    fd = os.open(self.path / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 384)
                     self.files[name] = os.fdopen(fd, "wb")
         except OSError:
             self.close()
@@ -229,21 +238,92 @@ class MediaSink:
         if name in self.files:
             self.files[name].write(data)
 
-    def reject(self, frame):
-        # Explicit raw-capture opt-in only. Diagnostics never contain packet bytes.
+    def _record_output(self, data, *, video=None, audio=()):
+        if not data:
+            return
+        self.stats["mux_output_bytes"] = self.stats.get("mux_output_bytes", 0) + len(data)
+        self.write("recording.ts", data)
+        self.emit(data)
+        self.stats["stream_emit_bytes"] = self.stats.get("stream_emit_bytes", 0) + len(data)
+        if video is not None:
+            payload, timing = video
+            self.video_output_hash.update(payload)
+            self.stats["video_output_frames"] += 1
+            self.stats["video_parameter_prefix_bytes"] = self.stats.get(
+                "video_parameter_prefix_bytes", 0
+            ) + len(timing["decoder_prefix"])
+        for payload, units, samples in audio:
+            self.audio_output_hash.update(payload)
+            self.stats["audio_output_access_units"] += units
+            self.stats["audio_output_core_samples"] += samples
+
+    def _flush_pending_video(self):
+        if self.pending_video is None:
+            return
+        timing, payload = self.pending_video
+        pending_record = self.pending_video_record
+        pending_audio = tuple(self.pending_audio)
+        # The muxer advances its decode timeline before the downstream emit
+        # callback runs. Detach staged input first so a write/backpressure
+        # exception cannot cause close() to mux the same IDR or audio twice.
+        self.pending_video = None
+        self.pending_video_record = None
+        self.pending_audio.clear()
+        self.pending_audio_bytes = 0
+        ts = self.mux.add_video(timing["dts"], timing["pts"], payload, idr=timing["idr"])
+        audio_for_emit = []
+        if ts:
+            for timestamp, audio_payload, units, samples in pending_audio:
+                ts += self.mux.add_audio(self.video_clock.audio_pts(timestamp), audio_payload)
+                audio_for_emit.append((audio_payload, units, samples))
+            self._record_output(ts, video=(payload, timing), audio=audio_for_emit)
+        if pending_record is not None:
+            pending_record.update(
+                pts_90k=timing["pts"],
+                dts_90k=timing["dts"],
+                poc=timing["poc"],
+                slice_type=timing["slice_type"],
+                timing_model=timing["timing_model"],
+            )
+            self.write(
+                "frames.jsonl",
+                (json.dumps(pending_record, sort_keys=True) + "\n").encode(),
+            )
+
+    def reject(self, frame, rejection_code="media_packet_rejected", *, wire_already_captured=False):
         if self.owns_directory:
             try:
-                fd = os.open(
-                    self.path / "rejected-grid-wire.bin", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
-                )
-                with os.fdopen(fd, "wb") as out:
-                    out.write(frame.wire)
+                if not wire_already_captured:
+                    fd = os.open(
+                        self.path / "rejected-grid-wire.bin", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 384
+                    )
+                    with os.fdopen(fd, "wb") as out:
+                        out.write(frame.wire)
+                try:
+                    chunk = parse_media(frame.body)
+                    identity = {
+                        "frame_number": chunk.frame,
+                        "frame_kind": chunk.kind,
+                        "timestamp_raw": chunk.timestamp,
+                        "payload_bytes": len(chunk.payload),
+                    }
+                except GridError:
+                    identity = layout_facts(frame.body)
+                code = str(rejection_code)
+                if (
+                    not code
+                    or len(code) > 64
+                    or (not all((c.islower() or c.isdigit() or c == "_" for c in code)))
+                ):
+                    code = "media_packet_rejected"
+                row = {"event": "media_packet_rejected", "command": frame.command, "code": code, **identity}
+                self.write("rejected-frames.jsonl", (json.dumps(row, sort_keys=True) + "\n").encode("ascii"))
             except OSError:
                 self.stats["rejected_packet_preservation_failed"] = 1
 
     def add(self, frame, discard=False):
-        chunk = parse_media(frame.body)
         self.write("grid-wire.bin", frame.wire)
+        chunk = parse_media(frame.body)
         self.write("grid-payload.bin", chunk.payload)
         self.payload_hash.update(chunk.payload)
         self.stats["media_packets"] += 1
@@ -253,60 +333,158 @@ class MediaSink:
             self.stats["extended_media_packets"] += 1
             self.stats["media_extension_bytes"] += chunk.extension_bytes
         if discard:
-            return chunk  # Preserve received raw bytes, but never replay duplicate ES/TS.
+            return chunk
         if self.last_frame is not None and chunk.frame != self.last_frame + 1:
             self.stats["sequence_discontinuities"] += 1
         self.last_frame = chunk.frame
         if chunk.kind in ("I", "P", "B"):
             self.write("video.h264", chunk.payload)
             self.stats["video_frames"] += 1
-            timing = self.video_clock.inspect(chunk.payload, chunk.timestamp)
+            try:
+                timing = self.video_clock.inspect(chunk.payload, chunk.timestamp)
+            finally:
+                self.stats.update(self.video_clock.last_observation)
+                self.stats["video_preroll_frames"] = self.video_clock.preroll_frames
+                self.stats["video_preroll_bytes"] = self.video_clock.preroll_bytes
             if "video" not in self.stats:
                 info = sps_info(chunk.payload)
                 if info:
                     self.stats["video"] = info
         elif chunk.kind == "A":
+            audio = parse_adts(chunk.payload)
+            if audio.config is not None and audio.config.audio_object_type != 2:
+                raise GridError("aac_profile_unsupported")
+            if audio.config_changed or (self.audio_config is not None and self.audio_config != audio.config):
+                raise GridError("aac_configuration_changed")
+            if any((frame.raw_data_blocks != 1 for frame in audio.frames)):
+                raise GridError("aac_raw_data_blocks_unsupported")
+            self.audio_config = audio.config
+            self.video_clock.observe_audio(chunk.timestamp)
+            if self.last_audio_timestamp is not None:
+                if chunk.timestamp <= self.last_audio_timestamp:
+                    raise GridError("audio_timestamp_regression")
+                last_au_start = self.last_audio_timestamp + Fraction(
+                    (self.last_audio_samples - 1024) * 10000000, audio.config.sample_rate
+                )
+                if chunk.timestamp <= last_au_start:
+                    raise GridError("audio_timestamp_regression")
+                expected = self.last_audio_timestamp + Fraction(
+                    self.last_audio_samples * 10000000, audio.config.sample_rate
+                )
+                delta = round(chunk.timestamp - expected)
+                one_au = Fraction(1024 * 10000000, audio.config.sample_rate)
+                if abs(chunk.timestamp - expected) >= one_au:
+                    raise GridError("audio_chunk_clock_mismatch")
+                self.stats["audio_chunk_clock_delta_100ns"] = delta
+                self.stats["audio_max_chunk_clock_delta_100ns"] = max(
+                    self.stats.get("audio_max_chunk_clock_delta_100ns", 0), abs(delta)
+                )
+                overlap = max(0, round(expected - chunk.timestamp))
+                self.stats["audio_chunk_overlap_100ns"] = overlap
+                self.stats["audio_max_chunk_overlap_100ns"] = max(
+                    self.stats.get("audio_max_chunk_overlap_100ns", 0), overlap
+                )
+            if self.audio_origin_timestamp is None:
+                self.audio_origin_timestamp = chunk.timestamp
+            one_au = Fraction(1024 * 10000000, audio.config.sample_rate)
+            sample_clock_timestamp = self.audio_origin_timestamp + Fraction(
+                self.stats["audio_core_samples"] * 10000000, audio.config.sample_rate
+            )
+            audio_clock_drift = (
+                chunk.timestamp
+                - self.audio_origin_timestamp
+                - Fraction(self.stats["audio_core_samples"] * 10000000, audio.config.sample_rate)
+            )
+            if abs(audio_clock_drift) >= one_au:
+                raise GridError("audio_timestamp_cumulative_drift")
+            self.stats["audio_clock_drift_100ns"] = round(audio_clock_drift)
+            self.last_audio_timestamp = chunk.timestamp
+            self.last_audio_samples = audio.core_samples
             self.write("audio.aac", chunk.payload)
             self.stats["audio_frames"] += 1
+            self.stats["audio_adts_frames"] += len(audio.frames)
+            self.stats["audio_access_units"] += audio.access_unit_count
+            self.stats["audio_core_samples"] += audio.core_samples
             if "audio" not in self.stats:
                 self.stats["audio"] = adts_info(chunk.payload)
         ts = b""
+        video_for_emit = None
+        audio_for_emit = []
+        hold_video_record = False
         if chunk.kind in ("I", "P", "B"):
             if timing is not None:
-                ts = self.mux.add_video(timing["dts"], timing["pts"], chunk.payload, idr=timing["idr"])
+                mux_payload = timing["decoder_prefix"] + chunk.payload
+                if (
+                    self.pending_video is None
+                    and not self.mux.started
+                    and timing["idr"]
+                    and timing["timing_model"] == "hrd_sei"
+                ):
+                    # Hold the first HRD-timed IDR until the next picture checks
+                    # the candidate POC order. A conflict aborts before either
+                    # candidate reaches the muxer; close may preserve this valid
+                    # IDR as partial output while the original error propagates.
+                    self.pending_video = (timing, mux_payload)
+                    hold_video_record = True
+                else:
+                    if self.pending_video is not None:
+                        self._flush_pending_video()
+                    ts = self.mux.add_video(timing["dts"], timing["pts"], mux_payload, idr=timing["idr"])
+                    if ts:
+                        video_for_emit = mux_payload
                 self.stats["last_video_dts_90k"] = timing["dts"]
                 self.stats["last_video_pts_90k"] = timing["pts"]
                 self.stats["last_video_slice_type"] = timing["slice_type"]
                 self.stats["last_video_poc"] = timing["poc"]
+                self.stats["h264_poc_type"] = timing["sps"]["poc_type"]
+                self.stats["h264_fixed_vui_timing"] = int(timing["sps"]["timing_fixed"])
+                self.stats["video_timing_model"] = timing["timing_model"]
+                if ts and self.pending_audio:
+                    for timestamp, payload, units, samples in self.pending_audio:
+                        audio_pts = self.video_clock.audio_pts(timestamp)
+                        ts += self.mux.add_audio(audio_pts, payload)
+                        audio_for_emit.append((payload, units, samples))
+        elif not self.mux.started:
+            if self.pending_audio_bytes + len(chunk.payload) > 1 << 20 or len(self.pending_audio) >= 64:
+                raise GridError("audio_preroll_limit")
+            self.pending_audio.append(
+                (sample_clock_timestamp, chunk.payload, audio.access_unit_count, audio.core_samples)
+            )
+            self.pending_audio_bytes += len(chunk.payload)
         else:
-            ts = self.mux.add_audio(self.video_clock.audio_pts(chunk.timestamp), chunk.payload)
+            audio_pts = self.video_clock.audio_pts(sample_clock_timestamp)
+            ts = self.mux.add_audio(audio_pts, chunk.payload)
+            audio_for_emit.append((chunk.payload, audio.access_unit_count, audio.core_samples))
         if ts:
-            self.write("recording.ts", ts)
-            self.emit(ts)
-        self.write(
-            "frames.jsonl",
-            (
-                json.dumps(
-                    {
-                        "frame": chunk.frame,
-                        "type": chunk.kind,
-                        "timestamp_raw": chunk.timestamp,
-                        "payload_bytes": len(chunk.payload),
-                        **(
-                            {
-                                "pts_90k": timing["pts"],
-                                "dts_90k": timing["dts"],
-                                "poc": timing["poc"],
-                                "slice_type": timing["slice_type"],
-                            }
-                            if chunk.kind in ("I", "P", "B") and timing is not None
-                            else {}
-                        ),
-                    }
-                )
-                + "\n"
-            ).encode(),
-        )
+            self._record_output(
+                ts,
+                video=(video_for_emit, timing) if video_for_emit is not None else None,
+                audio=audio_for_emit,
+            )
+            if self.pending_audio and audio_for_emit:
+                self.pending_audio.clear()
+                self.pending_audio_bytes = 0
+        record = {
+            "frame": chunk.frame,
+            "type": chunk.kind,
+            "timestamp_raw": chunk.timestamp,
+            "payload_bytes": len(chunk.payload),
+            **(
+                {
+                    "pts_90k": timing["pts"],
+                    "dts_90k": timing["dts"],
+                    "poc": timing["poc"],
+                    "slice_type": timing["slice_type"],
+                    "timing_model": timing["timing_model"],
+                }
+                if chunk.kind in ("I", "P", "B") and timing is not None and not hold_video_record
+                else {}
+            ),
+        }
+        if hold_video_record:
+            self.pending_video_record = record
+        else:
+            self.write("frames.jsonl", (json.dumps(record, sort_keys=True) + "\n").encode())
         return chunk
 
     def close(self):
@@ -314,26 +492,42 @@ class MediaSink:
             return
         self.closed = True
         failed = False
+        pending_output_error = None
+        if self.pending_video is not None:
+            try:
+                # A lone IDR has no later picture that could contradict its
+                # parsed HRD candidate. Preserve that valid candidate at EOF.
+                self._flush_pending_video()
+            except BaseException as error:
+                pending_output_error = error
+                self.pending_video = None
+                self.pending_video_record = None
         for f in self.files.values():
             try:
                 f.close()
             except OSError:
                 failed = True
         self.files.clear()
+        self.stats["audio_preroll_unoutput_access_units"] = sum((item[2] for item in self.pending_audio))
+        self.pending_audio.clear()
+        self.pending_audio_bytes = 0
         self.stats["payload_sha256"] = self.payload_hash.hexdigest()
-        self.stats["playable_video_frames"] = self.mux.video_frames
+        self.stats["video_output_sha256"] = self.video_output_hash.hexdigest()
+        self.stats["audio_output_sha256"] = self.audio_output_hash.hexdigest()
+        self.stats["playable_video_frames"] = self.stats["video_output_frames"]
         if self.mux.first_pts is not None:
-            self.stats["media_timeline_seconds"] = (self.mux.last_pts - self.mux.first_pts) / 90000
+            self.stats["media_timeline_seconds"] = (self.mux.max_pts - self.mux.min_pts) / 90000
         if self.owns_directory:
-            # Fixed facts only: no session, endpoint, account, or target values.
             path = self.path / "grid-analysis.json"
             try:
-                fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 384)
                 with os.fdopen(fd, "w") as f:
                     json.dump(self.stats, f, indent=2)
             except FileExistsError:
                 pass
             except OSError:
                 failed = True
+        if pending_output_error is not None:
+            raise pending_output_error
         if failed:
             raise GridError("capture_close_failed")

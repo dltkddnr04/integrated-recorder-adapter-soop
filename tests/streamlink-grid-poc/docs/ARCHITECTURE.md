@@ -83,12 +83,16 @@ is retained in optional raw wire capture but excluded from H.264/AAC elementary
 streams. Its content semantics are unknown and it is treated as opaque metadata;
 codec configuration must still be available through the supported media path.
 
-`h264clock.py` currently supports progressive Annex-B H.264, POC type 0,
-non-FMO PPS, one picture per Grid video chunk and fixed-frame-rate VUI timing. It
-derives display order from POC and decode order from the observed Grid 100-ns
-timestamp. It rejects absent/unsupported timing, interlacing, unsupported POC mode,
-codec-configuration changes, nonmonotonic Grid video time, and PTS-before-DTS rather
-than guessing from a nominal FPS. SPS DPB/reorder bounds constrain POC movement.
+`h264clock.py` parses progressive Annex-B H.264 POC types 0/1/2 for order
+validation, not duration calculation. The supported Grid decode-clock model uses
+per-picture HRD/SEI DPB output delay for PTS. Fixed VUI FPS alone is insufficient
+to time reordered pictures. Without HRD, only constrained POC-2 or zero-reorder
+streams can use PTS=DTS. Contradictory POC/timestamps, unsupported structures and
+codec changes fail closed. Some observed adult-stream Grid/HRD clocks conflict;
+that combination remains unsupported rather than being silently retimed.
+Initialization waits for valid active SPS/PPS and IDR within fixed byte/frame/time
+bounds; early audio retention is also bounded. See
+[H264_TIMING_DIAGNOSIS.md](H264_TIMING_DIAGNOSIS.md).
 
 `mpegts.py` emits PTS+DTS PES headers for video, PTS for AAC, and PCR from video DTS;
 timestamps are serialized in the standard 33-bit clock domain. It retains PAT/PMT,

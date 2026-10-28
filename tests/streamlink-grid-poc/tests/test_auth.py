@@ -4,8 +4,24 @@ import pytest
 import requests
 
 from soop_grid.auth import HTTP, LIVE
-from soop_grid.bootstrap import Config, bootstrap
+from soop_grid.bootstrap import Config, Session, bootstrap
 from soop_grid.protocol import GridError
+
+
+def test_session_discards_bootstrap_secrets_after_certificate_issue():
+    session = Session(
+        "fixture_account",
+        12345,
+        "1",
+        ("8.8.8.8", 1),
+        ("8.8.4.4", 2),
+        "fixture-cookie",
+        b"fixture-ticket",
+        b"fixture-stream-password",
+    )
+    session.clear_gateway_auth()
+    assert session.cookie == "" and session.ticket == b"" and session.stream_password == b""
+    assert session.center == ("8.8.4.4", 2) and session.bno == 12345
 
 
 def test_account_login_form_and_session_confirmation(monkeypatch):
@@ -283,3 +299,205 @@ def test_invalid_bno_rejected_before_http(bno):
 
     with pytest.raises(GridError):
         bootstrap(Config("fixture_channel", bno), lambda _: None, http_factory=no_http)
+
+
+@pytest.mark.parametrize("duration", [float("nan"), float("inf"), -float("inf")])
+def test_duration_must_be_finite(duration):
+    with pytest.raises(GridError, match="duration"):
+        Config("fixture_channel", duration=duration).validate()
+
+
+def test_bootstrap_clears_secrets_on_validation_and_factory_failure():
+    for broadcaster in ("invalid/channel", "fixture_channel"):
+        config = Config(broadcaster, account="fixture_account", account_password="fixture-secret")
+
+        def fail():
+            raise GridError("factory_failed")
+
+        with pytest.raises(GridError):
+            bootstrap(config, lambda _: None, http_factory=fail)
+        assert not config.account_password and not config.account
+
+
+@pytest.mark.parametrize("channel", [None, [], "fixture-secret"])
+def test_login_session_schema_is_fixed_error(monkeypatch, channel):
+    http = HTTP()
+    replies = iter([{"RESULT": 1}, {"CHANNEL": channel}])
+    monkeypatch.setattr(http, "json", lambda *a, **k: next(replies))
+    try:
+        with pytest.raises(GridError, match="session_unconfirmed"):
+            http.login("fixture_account", "fixture-password")
+    finally:
+        http.close()
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://live.sooplive.com:secret/",
+        "https://[invalid/",
+        "https://@live.sooplive.com/",
+        "https://live.sooplive.com/#fragment",
+    ],
+)
+def test_malformed_http_destinations_never_reach_transport(monkeypatch, url):
+    http = HTTP()
+    monkeypatch.setattr(http.session, "request", lambda *a, **k: pytest.fail("transport reached"))
+    try:
+        with pytest.raises(GridError, match="destination_invalid"):
+            http.request("GET", url)
+    finally:
+        http.close()
+
+
+def test_http_elapsed_budget_and_empty_body_cancellation(monkeypatch):
+    import threading
+    import soop_grid.auth as auth
+
+    stop = threading.Event()
+    http = HTTP(stop)
+
+    class Response:
+        status_code = 200
+        url = LIVE
+        closed = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self.closed = True
+
+        def iter_content(self, size):
+            yield b"a"
+            yield b"b"
+
+    response = Response()
+    monkeypatch.setattr(http.session, "request", lambda *a, **k: response)
+    ticks = iter([0, 0, 31, 31, 31])
+    monkeypatch.setattr(auth.time, "monotonic", lambda: next(ticks))
+    with pytest.raises(GridError, match="http_deadline"):
+        http.request("GET", LIVE)
+    assert response.closed
+
+    monkeypatch.setattr(auth.time, "monotonic", lambda: 0)
+
+    def empty(size):
+        stop.set()
+        return iter(())
+
+    monkeypatch.setattr(response, "iter_content", empty)
+    with pytest.raises(GridError, match="receiver_closed"):
+        http.request("GET", LIVE)
+    http.close()
+
+
+@pytest.mark.parametrize("field,value", [("GWIP", 134744072), ("GWPT", True), ("CTPT", 19000.5)])
+def test_bootstrap_endpoint_schema_rejects_coercion(field, value):
+    class Bad(FakeHTTP):
+        def json(self, method, url, **kwargs):
+            root = super().json(method, url, **kwargs)
+            if url == LIVE:
+                root["CHANNEL"][field] = value
+            return root
+
+    with pytest.raises(GridError):
+        bootstrap(Config("fixture_channel", "12345"), lambda _: None, http_factory=Bad)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"[]",
+        b'{"result":1,"result":-1}',
+        b'{"result":NaN}',
+        b'{"result":Infinity}',
+        b"[" * 2000 + b"]" * 2000,
+        b"\xff",
+    ],
+)
+def test_http_json_rejects_ambiguous_or_invalid_schema(monkeypatch, body):
+    http = HTTP()
+    monkeypatch.setattr(http, "request", lambda *a, **k: body)
+    try:
+        with pytest.raises(GridError, match="json_invalid"):
+            http.json("GET", LIVE)
+    finally:
+        http.close()
+
+
+def test_http_transport_bounds_and_cleanup(monkeypatch):
+    import threading
+
+    stop = threading.Event()
+    http = HTTP(stop)
+    assert http.session.trust_env is False
+    calls = []
+
+    class Response:
+        status_code = 200
+        url = LIVE
+        closed = False
+        chunks = [b"x" * 65536] * 33
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self.closed = True
+
+        def iter_content(self, size):
+            yield from self.chunks
+
+    response = Response()
+
+    def request(*a, **kwargs):
+        calls.append(kwargs)
+        return response
+
+    monkeypatch.setattr(http.session, "request", request)
+    with pytest.raises(GridError, match="response_limit"):
+        http.request("GET", LIVE)
+    assert response.closed
+    assert calls[0]["timeout"] == (3, 8)
+    assert calls[0]["allow_redirects"] is False and calls[0]["stream"] is True
+    response.chunks = [b"x" * (2 << 20)]
+    assert len(http.request("GET", LIVE)) == 2 << 20
+    stop.set()
+    with pytest.raises(GridError, match="receiver_closed"):
+        http.request("GET", LIVE)
+    assert len(calls) == 2
+    http.close()
+
+
+@pytest.mark.parametrize("cookie", ["bad\r\nCookie: secret", "bad;other=secret", "bad\x11value"])
+def test_public_cookie_is_validated_before_watch_request(cookie):
+    class Bad(FakeHTTP):
+        def cookie(self, name):
+            return cookie
+
+        def json(self, method, url, **kwargs):
+            assert url == LIVE, "invalid cookie reached Watch headers"
+            return super().json(method, url, **kwargs)
+
+    with pytest.raises(GridError, match="cookie_missing_or_invalid"):
+        bootstrap(Config("fixture_channel", "12345"), lambda _: None, http_factory=Bad)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"account": True, "account_password": 123},
+        {"stream_password": 123},
+        {"require_adult": "false"},
+        {"user_agent": "x\r\nSecret: value"},
+        {"referer": "https://example.org/"},
+    ],
+)
+def test_config_types_and_headers_fail_before_http(kwargs):
+    with pytest.raises(GridError):
+        bootstrap(
+            Config("fixture_channel", "12345", **kwargs),
+            lambda _: None,
+            http_factory=lambda: pytest.fail("invalid config reached HTTP"),
+        )

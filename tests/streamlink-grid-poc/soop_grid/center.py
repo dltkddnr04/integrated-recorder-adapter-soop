@@ -17,7 +17,7 @@ JOINLOG = b"log\x11\x06&\x06os\x06=\x06Linux\x12"
 
 
 def valid_seed(seed):
-    if len(seed) != 20:
+    if not isinstance(seed, bytes) or len(seed) != 20:
         return False
     plain = bytes((b - ADJUST[i % 6]) & 255 for i, b in enumerate(seed))
     return hmac.compare_digest(wire_hash(plain[:4]), plain[4:])
@@ -34,20 +34,29 @@ class Credentials:
 
     @classmethod
     def parse(cls, body, guid, bno, password=b""):
-        if not 44 <= len(body) <= 8192 or struct.unpack_from("<I", body, 12)[0] != len(body) - 16:
+        if (
+            not isinstance(body, bytes)
+            or not 44 <= len(body) <= 8192
+            or struct.unpack_from("<I", body, 12)[0] != len(body) - 16
+        ):
             raise GridError("certificate_length_invalid")
         text = body[16:-28]
         end = text.find(b"\0")
         seed = body[-28:-8]
         if (
             end < 1
+            or end > 4096
+            or any(b in text[:end] for b in (17, 18))
             or not valid_seed(seed)
-            or not 0 < len(guid) <= 73
-            or "\0" in guid
+            or not isinstance(guid, str)
+            or not re.fullmatch(
+                r"(?:[0-9A-Fa-f]{32}|[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12})", guid
+            )
+            or type(bno) is not int
             or not 0 < bno <= 0xFFFFFFFF
         ):
             raise GridError("issued_certificate_invalid")
-        if password and (len(password) > 12 or any(b < 32 or b > 126 for b in password)):
+        if not isinstance(password, bytes) or len(password) > 12 or any(b < 32 or b > 126 for b in password):
             raise GridError("stream_password_encoding_invalid")
         return cls(text[:end], seed, guid, bno, password)
 
@@ -73,8 +82,22 @@ def auth_body(c, counter=1):
 
 
 def join_body(c):
-    if not c.ticket or not c.bno:
+    if (
+        not isinstance(c.ticket, bytes)
+        or not 0 < len(c.ticket) <= 4096
+        or any(b in c.ticket for b in (0, 17, 18))
+        or type(c.bno) is not int
+        or not 0 < c.bno <= 0xFFFFFFFF
+    ):
         raise GridError("issued_ticket_required")
+    if (
+        not isinstance(c.password, bytes)
+        or len(c.password) > 12
+        or any(b < 32 or b > 126 for b in c.password)
+        or not isinstance(c.joinlog, bytes)
+        or len(c.joinlog) > 8192
+    ):
+        raise GridError("join_field_bounds")
     log = re.sub(b"liveualog\x11[^\x12]*\x12", b"", c.joinlog, count=1)
     text = (
         log
@@ -95,6 +118,8 @@ def json_body(data):
 
 
 def discover_parent(network, address, credentials, report):
+    authentication = auth_body(credentials)
+    join = join_body(credentials)
     sock = network.connect(address)
 
     def send(cmd, body=b""):
@@ -122,25 +147,34 @@ def discover_parent(network, address, credentials, report):
         node_key = struct.unpack_from("<I", frame.body, 4)[0]
         send(0x3E, struct.pack("<HHI", 4, int((time.monotonic() - started) * 500) & 65535, 0))
         send(0x14, bytes(12))
-        send(0x2A, auth_body(credentials))
-        send(0x46, join_body(credentials))
+        send(0x2A, authentication)
+        send(0x46, join)
         handle = None
+        joined = False
         requested = False
+        parent_requested = False
         for _ in range(24):
             frame = receive()
             if frame.command == 0x4A and len(frame.body) >= 52:
                 handle = frame.body[:4]
-            if frame.command == 0x46 and handle is not None and not requested:
+            if frame.command == 0x46:
+                joined = True
+            if joined and handle is not None and not requested:
                 requested = True
                 report("center_join_accepted")
                 send(0x71, json_body({"broad_no": 0, "relay_port": 0, "reverse_port": 0}))
                 send(0x50, handle)
             if frame.command == 0x50:
+                if not requested or parent_requested:
+                    raise GridError("center_discovery_sequence_invalid")
+                parent_requested = True
                 send(
                     0x69,
                     json_body({"list": [{"alloc_type": 1, "parent_ip": 0, "parent_port": 0, "quality": 1}]}),
                 )
             if frame.command == 0x69:
+                if not parent_requested:
+                    raise GridError("center_discovery_sequence_invalid")
                 from .parent import parse_parents
 
                 parents = parse_parents(frame.body)
