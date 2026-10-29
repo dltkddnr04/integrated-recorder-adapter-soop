@@ -1,14 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright (c) 2026 source.soop contributors
-"""Bounded H.264 picture-order parser and provisional Grid-clock mapper.
+"""Bounded H.264 syntax/POC validation and Grid composition timestamps.
 
-POC 0/1/2 validates picture order; POC distance is not elapsed time. The
-current output model treats the empirically 100-ns Grid value as decode time
-and uses HRD Picture Timing SEI only for relative presentation delay. No
-protocol evidence proves Grid↔HRD clock equality. Grid DTS monotonicity,
-HRD-derived PTS/POC ordering and AAC sample-clock continuity are separate
-checks. Missing or contradictory timing evidence fails closed without guessed
-FPS. This mapping is an implementation model, not an official SOOP guarantee.
+Production supplies explicit raw Grid composition, in 100ns units. POC
+validates display order and never determines elapsed time. The optional
+composition-less parser API retains the historical HRD model for offline
+comparisons; a clock cannot switch timing sources after accepting a picture.
+Grid/HRD clock equality is not assumed. Audio uses the same fixed origin.
 """
 
 from collections import deque
@@ -929,14 +927,14 @@ class H264Clock:
             self.prev_frame_num_offset = frame_num_offset
         return int(poc)
 
-    def inspect(self, payload, grid_timestamp):
+    def inspect(self, payload, grid_timestamp, composition_offset=None):
         # Parsing and timeline validation mutate POC, epoch, and parameter-set
         # state. A rejected AU must leave the prior accepted reference state
         # intact, including failures discovered after syntax parsing.
         state = self.__dict__.copy()
         state["picture_times"] = deque(self.picture_times, maxlen=self.picture_times.maxlen)
         try:
-            return self._inspect(payload, grid_timestamp)
+            return self._inspect(payload, grid_timestamp, composition_offset)
         except BaseException as error:
             safe_facts = error.safe_facts if isinstance(error, GridError) else None
             self.__dict__.clear()
@@ -945,9 +943,14 @@ class H264Clock:
                 self.last_observation = {**self.last_observation, **safe_facts}
             raise
 
-    def _inspect(self, payload, grid_timestamp):
+    def _inspect(self, payload, grid_timestamp, composition_offset=None):
         if type(grid_timestamp) is not int or not 0 <= grid_timestamp < (1 << 64):
             raise GridError("media_timestamp_bounds")
+        if composition_offset is not None:
+            if type(composition_offset) is not int or not 0 <= composition_offset < 1 << 31:
+                raise GridError("grid_composition_offset_unsupported")
+            if grid_timestamp + composition_offset >= 1 << 64:
+                raise GridError("media_timestamp_bounds")
         if self.origin_dts is None and self.preroll_timestamp is not None:
             if (
                 self.preroll_frames + 1 > 600
@@ -955,6 +958,10 @@ class H264Clock:
                 or abs(grid_timestamp - self.preroll_timestamp) > 100_000_000
             ):
                 raise GridError("h264_start_boundary_unavailable")
+        if self.timing_model is not None and (self.timing_model == "grid_composition") != (
+            composition_offset is not None
+        ):
+            raise GridError("h264_timing_changed")
         units = nals(payload, max_units=256)
         # Validate AU ordering before parsing parameter sets, because parsing
         # them mutates the clock's configuration state. A malformed AU must
@@ -1133,6 +1140,11 @@ class H264Clock:
                 raise GridError("h264_frame_num_gap")
             if sps["poc_type"] == 2 and not header.nal_ref_idc and self.previous_nonreference:
                 raise GridError("h264_poc2_nonreference_sequence_invalid")
+        if composition_offset is not None:
+            if sps["poc_type"] == 1:
+                raise GridError("h264_grid_poc_type_unverified")
+            if header.mmco5:
+                raise GridError("h264_grid_mmco5_unverified")
         poc = self._picture_order(header, sps)
         self.last_observation["h264_current_poc"] = poc
 
@@ -1164,7 +1176,10 @@ class H264Clock:
         for key in ("cpb_removal_delay", "dpb_output_delay"):
             if key in picture_timing:
                 self.last_observation["h264_" + key] = picture_timing[key]
-        if sps["nal_hrd"] or sps["vcl_hrd"]:
+        if composition_offset is not None:
+            model = "grid_composition"
+            pts = self._rescale(grid_timestamp + composition_offset - self.origin_dts) + 90_000
+        elif sps["nal_hrd"] or sps["vcl_hrd"]:
             if "dpb_output_delay" not in picture_timing:
                 raise GridError("h264_hrd_timing_missing")
             if sps["clock_tick_100ns"] is None:
@@ -1209,6 +1224,8 @@ class H264Clock:
             raise GridError("h264_picture_order_conflict", safe_facts=facts)
         if sum(pts < old_pts for _, old_pts in self.picture_times) > sps["max_reorder"]:
             raise GridError("h264_reorder_bound_invalid")
+        if any(pts == old_pts for _, old_pts in self.picture_times):
+            raise GridError("h264_picture_order_conflict")
         for old_poc, old_pts in self.picture_times:
             if (poc < old_poc and pts >= old_pts) or (poc > old_poc and pts <= old_pts):
                 # Preserve observations from the rejected AU itself. inspect()

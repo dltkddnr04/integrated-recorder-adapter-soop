@@ -173,7 +173,7 @@ def receive(config, network, emit, report, stats):
         credentials = obtain_certificate(network, session, report)
         session.clear_gateway_auth()
         parents, node_key = discover_parent(network, session.center, credentials, report)
-        sink = MediaSink(emit, config.capture_dir)
+        sink = MediaSink(emit, config.capture_dir, synchronize_startup=True)
         stats.update(sink.stats)
         sink.stats = stats  # Heartbeats can observe counters while reception is running.
         receive_media(

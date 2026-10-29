@@ -22,6 +22,12 @@ class Chunk:
     timestamp: int
     payload: bytes = field(repr=False)
     extension_bytes: int = 0
+    auxiliary_time_raw: int = 0
+    composition_offset_raw: int = 0
+
+    @property
+    def start_timestamp(self):
+        return self.timestamp
 
 
 def layout_facts(body):
@@ -41,18 +47,36 @@ def parse_media(body):
     header = struct.unpack_from("<H", body, 2)[0]
     extension, size = struct.unpack_from("<II", body, 4)
     start = header + extension
-    if not 69 <= header <= 4096 or extension > 4096 or size < 1 or (start + size != len(body)):
+    if (
+        struct.unpack_from("<H", body, 0)[0] != 1
+        or header != 69
+        or extension > 4096
+        or size < 1
+        or start + size != len(body)
+    ):
         raise GridError("media_layout_unconfirmed")
     kind = chr(body[40])
     if kind not in ("I", "P", "B", "A"):
         raise GridError("media_kind_unconfirmed")
+    timestamp = struct.unpack_from("<Q", body, 41)[0]
+    composition = struct.unpack_from("<I", body, 57)[0]
+    if composition >= 1 << 31:
+        raise GridError("grid_composition_offset_unsupported")
+    if timestamp + composition >= 1 << 64:
+        raise GridError("media_timestamp_bounds")
     payload = body[start:]
     if kind in ("I", "P", "B") and (len(payload) < 4 or payload[:2] != b"\x00\x00"):
         raise GridError("video_prefix_unconfirmed")
     if kind == "A" and (len(payload) < 7 or payload[0] != 255 or payload[1] & 240 != 240):
         raise GridError("audio_prefix_unconfirmed")
     return Chunk(
-        struct.unpack_from("<Q", body, 12)[0], kind, struct.unpack_from("<Q", body, 41)[0], payload, extension
+        struct.unpack_from("<Q", body, 12)[0],
+        kind,
+        timestamp,
+        payload,
+        extension,
+        struct.unpack_from("<Q", body, 49)[0],
+        composition,
     )
 
 
@@ -179,7 +203,12 @@ def adts_info(payload):
 
 
 class MediaSink:
-    def __init__(self, emit, capture_dir=None):
+    def __init__(self, emit, capture_dir=None, *, synchronize_startup=False):
+        self.synchronize_startup = synchronize_startup
+        self.startup_frames = []
+        self.startup_bytes = 0
+        self.startup_audio = None
+        self.startup_video = False
         self.emit = emit
         self.mux = TSMux()
         self.video_clock = H264Clock()
@@ -339,6 +368,27 @@ class MediaSink:
                 self.stats["rejected_packet_preservation_failed"] = 1
 
     def add(self, frame, discard=False):
+        if not self.synchronize_startup or discard:
+            return self._add(frame, discard)
+        chunk = parse_media(frame.body)
+        self.startup_frames.append(frame)
+        self.startup_bytes += len(frame.body)
+        if chunk.kind == "A" and self.startup_audio is None:
+            self.startup_audio = chunk.timestamp
+        elif chunk.kind in ("I", "P", "B"):
+            self.startup_video = True
+        if self.startup_bytes > 32 << 20 or len(self.startup_frames) > 600:
+            raise GridError("media_startup_limit")
+        if self.startup_audio is not None and self.startup_video:
+            self.video_clock.observe_audio(self.startup_audio)
+            pending, self.startup_frames = self.startup_frames, []
+            self.startup_bytes = 0
+            self.synchronize_startup = False
+            for item in pending:
+                self._add(item)
+        return chunk
+
+    def _add(self, frame, discard=False):
         self.write("grid-wire.bin", frame.wire)
         chunk = parse_media(frame.body)
         self.write("grid-payload.bin", chunk.payload)
@@ -358,7 +408,9 @@ class MediaSink:
             self.write("video.h264", chunk.payload)
             self.stats["video_frames"] += 1
             try:
-                timing = self.video_clock.inspect(chunk.payload, chunk.timestamp)
+                timing = self.video_clock.inspect(
+                    chunk.payload, chunk.timestamp, chunk.composition_offset_raw
+                )
             finally:
                 self.stats.update(self.video_clock.last_observation)
                 self.stats["video_preroll_frames"] = self.video_clock.preroll_frames
@@ -508,6 +560,9 @@ class MediaSink:
         if self.closed:
             return
         self.closed = True
+        self.stats["startup_unoutput_frames"] = len(self.startup_frames)
+        self.startup_frames.clear()
+        self.startup_bytes = 0
         failed = False
         pending_output_error = None
         if self.pending_video is not None:

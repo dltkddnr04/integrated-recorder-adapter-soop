@@ -54,7 +54,7 @@ When omitted, the transport option defaults to `auto`, which tries Native Grid f
 
 ## Key limitations
 
-- Experimental/Beta. The latest bundle, `400f028e…`, completed a 30-minute Grid-only recording and passed full H.264/AAC decode plus TS/timestamp checks; that run contained no B pictures. A separate 30-minute run using an earlier bundle contained B pictures and passed full-file checks, but it is not represented as a same-build test. A separate HRD/POC presentation-order conflict remains fail-closed. Perceptual A/V sync, all codec/broadcast combinations, and repeated long-duration natural failures remain unverified. See the [latest 30-minute report](docs/LIVE_VALIDATION_30M_20261028.md) and [timeline analysis](docs/TIMELINE_MODEL_FIELD_VALIDATION_20261028.md).
+- Experimental/Beta. The latest bundle, `400f028e…`, completed a 30-minute Grid-only recording and passed full H.264/AAC decode plus TS/timestamp checks; that run contained no B pictures. A separate 30-minute run using an earlier bundle contained B pictures and passed full-file checks, but it is not represented as a same-build test. Grid composition timing has been replayed offline on four original captures. HRD disagreement alone no longer generates PTS; actual POC/PTS contradictions still fail closed. Perceptual A/V sync, all codec/broadcast combinations, and repeated long-duration natural failures remain unverified. See the [latest 30-minute report](docs/LIVE_VALIDATION_30M_20261028.md) and [timeline analysis](docs/TIMELINE_MODEL_FIELD_VALIDATION_20261028.md).
 - A roughly 600-second recording and three Cache-assisted recoveries after client-side Parent socket closes in one session were verified in controlled experiments. This does not guarantee lossless recovery from every failure.
 - Automatic account reauthentication, reliable classification of broadcast end versus network failure, and automatic broadcast-number changes are not supported.
 - Support is limited to validated subsets of H.264 timing/POC structures and ADTS AAC. Multi-Parent simultaneous reception is not supported.
@@ -83,3 +83,5 @@ This Streamlink plugin is separate from the Go-based Integrated Recorder Source 
 ## License
 
 The plugin and generated distribution artifact are licensed **AGPL-3.0-only**. See [LICENSE](LICENSE). Users are responsible for respecting broadcast access permissions, recording rights, and SOOP's terms.
+
+See [Grid composition timing validation](docs/GRID_COMPOSITION_TIMING.md) for the current model. New-model live endurance and perceptual A/V sync remain unverified.

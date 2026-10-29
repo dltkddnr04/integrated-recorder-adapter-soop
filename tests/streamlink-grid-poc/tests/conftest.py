@@ -67,11 +67,14 @@ def synthetic_sps(width=1920, height=1080):
     return b"\0\0\0\1\x67" + data + b"\0\0\1\x68\xce\0\0\1\x65\x88"
 
 
-def media_body(payload, kind="I", frame=1, timestamp=50_000_000):
+def media_body(payload, kind="I", frame=1, timestamp=50_000_000, composition_offset=None):
     b = bytearray(69 + len(payload))
     struct.pack_into("<HHIIQ", b, 0, 1, 69, 0, len(payload), frame)
     b[40] = ord(kind)
     struct.pack_into("<Q", b, 41, timestamp)
+    if composition_offset is None:
+        composition_offset = getattr(payload, "composition_offset_100ns", 0)
+    struct.pack_into("<I", b, 57, composition_offset)
     b[69:] = payload
     return bytes(b)
 
@@ -126,7 +129,40 @@ def encoded_bframes(tmp_path_factory):
         data[m.start() : starts[i + 1].start() if i + 1 < len(starts) else len(data)]
         for i, m in enumerate(starts)
     ]
-    result = [(unit, "I" if any(n[0] & 31 == 5 for n in nals(unit)) else "P") for unit in units]
+    # Simulated Grid composition metadata comes from independent decoder
+    # presentation order, not from the production POC/HRD implementation.
+    probe = os.environ.get("SOOP_TEST_FFPROBE") or shutil.which("ffprobe")
+    assert probe, "FFprobe required for synthetic Grid composition metadata"
+    frames = json.loads(
+        subprocess.check_output(
+            [
+                probe,
+                "-v",
+                "error",
+                "-f",
+                "h264",
+                "-show_frames",
+                "-show_entries",
+                "frame=pkt_pos",
+                "-of",
+                "json",
+                str(path),
+            ]
+        )
+    )["frames"]
+    display_rank = {int(row["pkt_pos"]): rank for rank, row in enumerate(frames)}
+
+    class GridFixtureAU(bytes):
+        pass
+
+    result = []
+    for index, unit in enumerate(units):
+        payload = GridFixtureAU(unit)
+        # The synthetic encoder explicitly uses two B frames at 30fps.
+        payload.composition_offset_100ns = round(
+            (display_rank[starts[index].start()] - index + 2) * 10000000 / 30
+        )
+        result.append((payload, "I" if any(n[0] & 31 == 5 for n in nals(unit)) else "P"))
     assert any(n[0] & 31 == 1 for unit, _ in result[1:] for n in nals(unit))
     return result
 

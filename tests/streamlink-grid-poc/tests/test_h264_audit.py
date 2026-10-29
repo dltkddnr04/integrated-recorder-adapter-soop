@@ -714,18 +714,9 @@ def test_hrd_presentation_order_conflict_fails_closed():
     assert clock.last_observation["h264_hrd_poc_order_conflicts"] == 1
 
 
-@pytest.mark.parametrize(
-    ("reorder", "expected_error"),
-    [
-        (None, "h264_picture_order_conflict"),
-        (0, "h264_reorder_bound_invalid"),
-        (1, "h264_picture_order_conflict"),
-    ],
-)
-def test_initial_hrd_poc_conflict_fails_closed_without_rewriting_first_picture(reorder, expected_error):
-    # A short I/P prefix does not prove that later pictures will not reorder.
-    # Even max_num_reorder_frames == 0 cannot repair contradictory HRD timing;
-    # preserve fail-closed behavior rather than outputting a guessed PTS=DTS.
+@pytest.mark.parametrize("reorder", [None, 0, 1])
+def test_grid_composition_does_not_inherit_hrd_poc_conflict(reorder):
+    # Grid's explicit zero composition is independent of HRD DPB delay.
     seq = sps(mode=2, fixed=True, reorder=reorder, hrd=True)
     first = annex(
         seq,
@@ -742,21 +733,12 @@ def test_initial_hrd_poc_conflict_fails_closed_without_rewriting_first_picture(r
     sink = MediaSink(output.append)
     sink.add(Frame(0xC748, media_body(first, "I", 1, 50_000_000)))
 
-    with pytest.raises(GridError) as caught:
-        sink.add(Frame(0xC748, media_body(second, "P", 2, 50_166_667)))
-
-    assert output == []
-    assert sink.video_clock.timing_model == "hrd_sei"
-    assert str(caught.value) == expected_error
-
-    # The already parsed IDR may be flushed as a valid partial TS during cleanup.
-    # The failure remains the primary exception and the rejected next picture
-    # must not be muxed or counted as output.
+    sink.add(Frame(0xC748, media_body(second, "P", 2, 50_166_667)))
     sink.close()
     assert output
-    assert sink.stats["video_output_frames"] == 1
-    assert sink.stats["video_frames"] == 2
-    assert sink.mux.video_frames == 1
+    assert sink.video_clock.timing_model == "grid_composition"
+    assert sink.stats["video_output_frames"] == 2
+    assert sink.stats["last_video_pts_90k"] == sink.stats["last_video_dts_90k"]
 
 
 def test_single_initial_hrd_idr_is_flushed_with_its_parsed_timing_at_eof(tmp_path):
@@ -780,7 +762,7 @@ def test_single_initial_hrd_idr_is_flushed_with_its_parsed_timing_at_eof(tmp_pat
     rows = [json.loads(line) for line in (capture_dir / "frames.jsonl").read_text().splitlines()]
     assert len(rows) == 1
     assert rows[0]["frame"] == 1
-    assert rows[0]["timing_model"] == "hrd_sei"
+    assert rows[0]["timing_model"] == "grid_composition"
     assert rows[0]["pts_90k"] >= rows[0]["dts_90k"]
     facts = json.loads((capture_dir / "grid-analysis.json").read_text())
     assert facts["video_output_frames"] == 1

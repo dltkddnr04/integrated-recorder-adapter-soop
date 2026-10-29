@@ -82,7 +82,7 @@ def test_receive_checks_media_coverage_after_sink_final_drain(monkeypatch):
     credentials = SimpleNamespace(clear=lambda: None)
 
     class Sink:
-        def __init__(self, *args):
+        def __init__(self, *args, **kwargs):
             self.stats = {}
 
         def close(self):

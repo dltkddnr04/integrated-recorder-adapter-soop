@@ -1,6 +1,8 @@
+Current model: [Grid composition timing](GRID_COMPOSITION_TIMING.md). Historical HRD-based results below retain their original revision scope. Production now uses explicit nonnegative Grid composition, common startup origin and unchanged sample-count AAC timing. POC type 1 and Grid MMCO5 remain unsupported. No AU insertion/deletion, resampling, wall-clock synchronization, or perceptual sync guarantee is provided.
+
 # Limitations, support boundaries, and licensing
 
-## Latest verified state — 2026-10-28
+## Historical live validation — 2026-10-28
 
 The standalone artifact `dist/soop_grid.py` has SHA-256
 `400f028ed99467ad644d61525f8a59f85477221dbba28708710ff06d77682cd0`.
@@ -23,7 +25,7 @@ Ruff check/format, compileall, deterministic bundle verification and
 `git diff --check` also passed. This does not replace the live evidence limits
 above.
 
-The current timestamp mapping is an empirically tested candidate: increasing
+The historical timestamp mapping was an empirically tested candidate: increasing
 Grid video time supplies a DTS candidate, HRD DPB output delay supplies relative
 PTS, and POC checks picture ordering rather than acting as a clock. A distinct
 observed HRD/POC ordering conflict still fails closed. AAC uses validated ADTS
@@ -47,15 +49,16 @@ perceptual A/V synchronization test has been performed.
   not established. Missing overlap or an unprovable frame gap terminates with an
   error.
 - H.264 support is limited to progressive Annex-B streams with parsed POC types
-  0/1/2, one picture per Grid video chunk, and validated timing syntax. Fixed VUI
-  frame rate alone is not sufficient for reordered pictures. The former 1 ms
+  0/2, one picture per Grid video chunk, and validated syntax. POC type 1
+  and MMCO5 remain supported only by historical parser tests, not production Grid timing. The former 1 ms
   Grid/HRD equality test was an unsupported receiver assumption and was removed.
-  HRD/POC contradictions remain fail-closed. HRD streams with
+  Grid composition/POC contradictions remain fail-closed. HRD streams with
   `low_delay_hrd_flag=1`, interlace, FMO, unsupported slice layouts, HEVC, and
   midstream codec changes are unsupported.
-- Without HRD, only constrained structures where lack of reordering is
-  established are accepted; arbitrary FPS interpolation is not used. A finite
-  I/P prefix cannot prove that later pictures will not reorder.
+- Production uses explicit Grid composition to determine PTS, including supported
+  reordered pictures without HRD. It never invents FPS or ignores POC order.
+  Unknown body versions/header layouts, negative composition and overflowing
+  raw presentation timestamps fail closed.
 - Audio support is limited to ADTS AAC-LC with one raw data block per ADTS frame,
   validated rate/channel/configuration, and bounded chunk sizes. The Grid audio
   message count is not the AAC access-unit count. Internal AU time is advanced

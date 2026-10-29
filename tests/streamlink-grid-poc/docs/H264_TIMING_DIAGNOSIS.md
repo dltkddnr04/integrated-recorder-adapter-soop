@@ -1,3 +1,5 @@
+Current production model: [Grid composition implementation and offline validation](GRID_COMPOSITION_TIMING.md). The HRD-generated PTS failures and results below are historical evidence; production no longer generates PTS from HRD DPB delay. Structural validation and actual Grid POC/PTS contradictions remain fail-closed.
+
 # H.264 timing: evidence and supported behavior
 
 **Current status update — 2026-10-28:** the earlier `h264_hrd_grid_clock_conflict`

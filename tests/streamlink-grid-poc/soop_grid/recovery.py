@@ -55,7 +55,12 @@ class Continuity:
         raise GridError(code)
 
     def accept(self, chunk):
-        identity = (chunk.kind, chunk.timestamp, hashlib.sha256(chunk.payload).digest())
+        identity = (
+            chunk.kind,
+            chunk.timestamp,
+            chunk.composition_offset_raw,
+            hashlib.sha256(chunk.payload).digest(),
+        )
         if chunk.frame in self.recent:
             if self.recent[chunk.frame] != identity:
                 self.reject("frame_identity_conflict")

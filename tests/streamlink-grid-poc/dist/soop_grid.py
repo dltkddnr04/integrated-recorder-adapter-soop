@@ -481,7 +481,7 @@ def _sg_crypto_service6(guid, timestamp, counter):
     return _sg_crypto_wire_hash(_sg_crypto_pad16(second)) + _sg_crypto_ctr(_sg_crypto_SERVICE_KEY, _sg_crypto_SERVICE_IV, second)
 
 
-# Module: diagnostics; source SHA-256: a4f642fac2402673c7805c15eb3194093d5de2129c78f37754f57f7f3f60c19d
+# Module: diagnostics; source SHA-256: a6cc4998c15886474e4351b6d61fbbfc41435822b6e7c74dae445146c931abe5
 import errno as _sg_diagnostics_errno
 import json as _sg_diagnostics_json
 import logging as _sg_diagnostics_logging
@@ -734,10 +734,10 @@ class _sg_diagnostics_Diagnostics:
                 except OSError:
                     self._io_failure()
                 self.file = None
-_sg_diagnostics_ERROR_CODES = frozenset(['aac_configuration_changed', 'aac_profile_unsupported', 'aac_raw_data_blocks_unsupported', 'adts_channel_config_unsupported', 'adts_chunk_limit', 'adts_crc_layout_invalid', 'adts_frame_length_invalid', 'adts_frame_limit', 'adts_input_invalid', 'adts_profile_unsupported', 'audio_preroll_limit', 'audio_timestamp_regression', 'audio_timestamp_cumulative_drift', 'audio_chunk_clock_mismatch', 'center_discovery_sequence_invalid', 'h264_access_unit_boundary_invalid', 'h264_hrd_clock_unconfirmed', 'h264_hrd_clock_changed', 'h264_hrd_grid_clock_conflict', 'h264_hrd_delay_limit', 'h264_hrd_initial_delay_invalid', 'h264_hrd_parameters_ambiguous', 'h264_hrd_timing_missing', 'h264_hrd_low_delay_timing_unsupported', 'h264_vui_hrd_flags_invalid', 'h264_frame_num_gap', 'h264_frame_num_invalid', 'h264_poc2_nonreference_sequence_invalid', 'h264_sei_payload_invalid', 'h264_nal_count_limit', 'h264_parameter_set_limit', 'h264_parameter_set_trailing_bits_invalid', 'media_pts_dts_invalid', 'h264_start_boundary_unavailable', 'h264_vcl_missing', 'h264_idr_picture_id_limit', 'h264_mmco5_timing_unsupported', 'h264_pic_struct_unsupported', 'h264_picture_order_conflict', 'h264_sei_message_limit', 'h264_sei_parameter_set_mismatch', 'h264_sei_after_vcl', 'h264_sei_buffering_period_order_invalid', 'h264_sei_buffering_period_missing', 'h264_sei_buffering_period_unexpected', 'h264_sei_timing_duplicate', 'h264_sei_timing_limit', 'h264_sei_trailing_bits_invalid', 'h264_sei_truncated', 'http_deadline_reached', 'user_agent_invalid', 'aac_pes_limit', 'account_credentials_required', 'account_input_invalid', 'account_login_denied_or_verification_required', 'account_session_unconfirmed', 'adts_header_invalid', 'adts_sample_rate_invalid', 'adult_check_unconfirmed', 'audio_prefix_unconfirmed', 'bootstrap_schema_invalid', 'broadcast_number_bounds', 'broadcast_target_invalid', 'buffer_backpressure_timeout', 'buffer_output_unit_invalid', 'cache_frame_bounds', 'cache_request_limit', 'capture_byte_limit_bounds', 'capture_close_failed', 'capture_deadline_reached', 'duration_limit_output_incomplete', 'stream_output_incomplete', 'duration_limit_output_incomplete', 'capture_duration_bounds', 'capture_limits_invalid', 'center_access_denied', 'center_body_limit', 'center_init_unexpected', 'center_rediscovery_failed', 'center_rediscovery_failed', 'center_session_missing', 'certificate_length_invalid', 'channel_live_number_unavailable', 'control_checksum_invalid', 'diagnostic_thread_start_failed', 'diagnostic_write_failed', 'first_party_http_failed', 'first_party_http_rejected', 'first_party_json_invalid', 'frame_identity_conflict', 'frame_sequence_gap_or_reset', 'frame_timestamp_regression', 'gateway_body_limit', 'gateway_certificate_denied', 'gateway_certificate_fields_invalid', 'gateway_cookie_missing_or_invalid', 'gateway_login_denied', 'gateway_login_fields_invalid', 'gateway_login_response_layout', 'gateway_login_unterminated_field', 'gateway_negative_reply', 'gateway_ticket_missing_or_invalid', 'grid_video_dts_not_increasing', 'guid_invalid', 'h264_chroma_unsupported', 'h264_codec_configuration_changed', 'h264_bit_depth_unsupported', 'h264_dimensions_invalid', 'h264_emulation_prevention_invalid', 'h264_field_bounds', 'h264_golomb_limit', 'h264_header_truncated', 'h264_hrd_limit', 'h264_idr_reference_invalid', 'h264_interlaced_unsupported', 'h264_level_dpb_invalid', 'h264_profile_unsupported', 'h264_reference_count_invalid', 'h264_dpb_bound_invalid', 'h264_weighted_bipred_reserved', 'h264_memory_management_operation_invalid', 'h264_memory_management_operation_limit', 'h264_multiple_pictures_per_grid_chunk', 'h264_nal_header_invalid', 'h264_parameter_set_missing', 'h264_poc_cycle_limit', 'h264_poc_fields_missing', 'h264_poc_mode_unsupported', 'h264_poc_regression_out_of_bound', 'h264_poc_width_invalid', 'h264_pps_id_limit', 'h264_pps_chroma_qp_offset_invalid', 'h264_pps_qp_offset_invalid', 'h264_pps_scaling_layout_mismatch', 'h264_pps_scaling_layout_unconfirmed', 'h264_pts_before_dts', 'h264_reference_count_limit', 'h264_ref_list_modification_invalid', 'h264_ref_list_modification_limit', 'h264_reorder_bound_invalid', 'h264_reorder_bound_unconfirmed', 'h264_reorder_limit', 'h264_reorder_timing_unconfirmed', 'h264_reserved_sps_bits_nonzero', 'h264_separate_colour_plane_unsupported', 'h264_slice_count_limit', 'h264_slice_groups_unsupported', 'h264_slice_nal_type_invalid', 'h264_slice_parameter_set_mismatch', 'h264_slice_type_invalid', 'h264_sps_id_limit', 'h264_switching_slice_unsupported', 'h264_timing_changed', 'h264_timing_unconfirmed', 'h264_vcl_partition_or_extension_unsupported', 'h264_vui_timing_invalid', 'http_destination_invalid', 'http_response_limit', 'incoming_body_limit', 'invalid_server_endpoint', 'issued_certificate_invalid', 'issued_seed_required', 'issued_ticket_required', 'join_field_bounds', 'live_metadata_denied_or_offline', 'live_target_changed', 'media_dts_bounds', 'media_dts_not_monotonic', 'media_header_short', 'media_kind_unconfirmed', 'media_layout_unconfirmed', 'media_pcr_gap_limit', 'media_pcr_not_increasing', 'media_pts_bounds', 'media_timestamp_bounds', 'network_read_failed', 'network_read_timeout', 'network_write_failed', 'no_playable_grid_video', 'no_playable_grid_audio', 'media_track_coverage_incomplete', 'media_track_coverage_unverified', 'no_usable_server_parent', 'parent_access_denied', 'parent_body_limit', 'parent_discovery_missing', 'parent_header_invalid', 'parent_list_invalid', 'parent_list_length', 'parent_list_short', 'parent_list_trailing_data', 'parent_media_stalled', 'parent_packet_limit', 'parent_quality_changed', 'parent_rediscovery_empty', 'parent_retry_limit', 'password_state_unknown', 'peer_closed_or_truncated', 'private_capture_create_failed', 'public_policy_restricted_or_unknown', 'public_watch_access_denied', 'public_watch_schema_invalid', 'reader_closed', 'reader_timeout', 'reader_shutdown_timeout', 'receiver_closed', 'receiver_internal_failure', 'receiver_thread_start_failed', 'recovery_candidates_exhausted', 'recovery_deadline_exhausted', 'recovery_overlap_unavailable', 'scoped_cookie_invalid', 'sps_chroma', 'sps_cycle_limit', 'sps_dimensions_invalid', 'sps_golomb_limit', 'sps_poc_invalid', 'sps_truncated', 'stream_password_encoding_invalid', 'stream_password_state_mismatch', 'tcp_connect_failed', 'video_prefix_unconfirmed', 'watch_target_changed'])
+_sg_diagnostics_ERROR_CODES = frozenset(['aac_configuration_changed', 'aac_profile_unsupported', 'aac_raw_data_blocks_unsupported', 'adts_channel_config_unsupported', 'adts_chunk_limit', 'adts_crc_layout_invalid', 'adts_frame_length_invalid', 'adts_frame_limit', 'adts_input_invalid', 'adts_profile_unsupported', 'audio_preroll_limit', 'audio_timestamp_regression', 'audio_timestamp_cumulative_drift', 'audio_chunk_clock_mismatch', 'center_discovery_sequence_invalid', 'h264_access_unit_boundary_invalid', 'h264_hrd_clock_unconfirmed', 'h264_hrd_clock_changed', 'h264_hrd_grid_clock_conflict', 'h264_hrd_delay_limit', 'h264_hrd_initial_delay_invalid', 'h264_hrd_parameters_ambiguous', 'h264_hrd_timing_missing', 'h264_hrd_low_delay_timing_unsupported', 'h264_vui_hrd_flags_invalid', 'h264_frame_num_gap', 'h264_frame_num_invalid', 'h264_poc2_nonreference_sequence_invalid', 'h264_sei_payload_invalid', 'h264_nal_count_limit', 'h264_parameter_set_limit', 'h264_parameter_set_trailing_bits_invalid', 'media_pts_dts_invalid', 'h264_start_boundary_unavailable', 'h264_vcl_missing', 'h264_idr_picture_id_limit', 'h264_mmco5_timing_unsupported', 'h264_pic_struct_unsupported', 'h264_picture_order_conflict', 'h264_sei_message_limit', 'h264_sei_parameter_set_mismatch', 'h264_sei_after_vcl', 'h264_sei_buffering_period_order_invalid', 'h264_sei_buffering_period_missing', 'h264_sei_buffering_period_unexpected', 'h264_sei_timing_duplicate', 'h264_sei_timing_limit', 'h264_sei_trailing_bits_invalid', 'h264_sei_truncated', 'http_deadline_reached', 'user_agent_invalid', 'aac_pes_limit', 'account_credentials_required', 'account_input_invalid', 'account_login_denied_or_verification_required', 'account_session_unconfirmed', 'adts_header_invalid', 'adts_sample_rate_invalid', 'adult_check_unconfirmed', 'audio_prefix_unconfirmed', 'bootstrap_schema_invalid', 'broadcast_number_bounds', 'broadcast_target_invalid', 'buffer_backpressure_timeout', 'buffer_output_unit_invalid', 'cache_frame_bounds', 'cache_request_limit', 'capture_byte_limit_bounds', 'capture_close_failed', 'capture_deadline_reached', 'duration_limit_output_incomplete', 'stream_output_incomplete', 'duration_limit_output_incomplete', 'capture_duration_bounds', 'capture_limits_invalid', 'center_access_denied', 'center_body_limit', 'center_init_unexpected', 'center_rediscovery_failed', 'center_rediscovery_failed', 'center_session_missing', 'certificate_length_invalid', 'channel_live_number_unavailable', 'control_checksum_invalid', 'diagnostic_thread_start_failed', 'diagnostic_write_failed', 'first_party_http_failed', 'first_party_http_rejected', 'first_party_json_invalid', 'frame_identity_conflict', 'frame_sequence_gap_or_reset', 'frame_timestamp_regression', 'gateway_body_limit', 'gateway_certificate_denied', 'gateway_certificate_fields_invalid', 'gateway_cookie_missing_or_invalid', 'gateway_login_denied', 'gateway_login_fields_invalid', 'gateway_login_response_layout', 'gateway_login_unterminated_field', 'gateway_negative_reply', 'gateway_ticket_missing_or_invalid', 'grid_video_dts_not_increasing', 'grid_composition_offset_unsupported', 'guid_invalid', 'h264_chroma_unsupported', 'h264_codec_configuration_changed', 'h264_bit_depth_unsupported', 'h264_dimensions_invalid', 'h264_emulation_prevention_invalid', 'h264_field_bounds', 'h264_golomb_limit', 'h264_header_truncated', 'h264_hrd_limit', 'h264_idr_reference_invalid', 'h264_interlaced_unsupported', 'h264_level_dpb_invalid', 'h264_profile_unsupported', 'h264_reference_count_invalid', 'h264_dpb_bound_invalid', 'h264_weighted_bipred_reserved', 'h264_memory_management_operation_invalid', 'h264_memory_management_operation_limit', 'h264_multiple_pictures_per_grid_chunk', 'h264_nal_header_invalid', 'h264_parameter_set_missing', 'h264_poc_cycle_limit', 'h264_poc_fields_missing', 'h264_poc_mode_unsupported', 'h264_poc_regression_out_of_bound', 'h264_poc_width_invalid', 'h264_pps_id_limit', 'h264_pps_chroma_qp_offset_invalid', 'h264_pps_qp_offset_invalid', 'h264_pps_scaling_layout_mismatch', 'h264_pps_scaling_layout_unconfirmed', 'h264_pts_before_dts', 'h264_reference_count_limit', 'h264_ref_list_modification_invalid', 'h264_ref_list_modification_limit', 'h264_reorder_bound_invalid', 'h264_reorder_bound_unconfirmed', 'h264_reorder_limit', 'h264_reorder_timing_unconfirmed', 'h264_reserved_sps_bits_nonzero', 'h264_separate_colour_plane_unsupported', 'h264_slice_count_limit', 'h264_slice_groups_unsupported', 'h264_slice_nal_type_invalid', 'h264_slice_parameter_set_mismatch', 'h264_slice_type_invalid', 'h264_sps_id_limit', 'h264_switching_slice_unsupported', 'h264_timing_changed', 'h264_timing_unconfirmed', 'h264_vcl_partition_or_extension_unsupported', 'h264_vui_timing_invalid', 'http_destination_invalid', 'http_response_limit', 'incoming_body_limit', 'invalid_server_endpoint', 'issued_certificate_invalid', 'issued_seed_required', 'issued_ticket_required', 'join_field_bounds', 'live_metadata_denied_or_offline', 'live_target_changed', 'media_dts_bounds', 'media_dts_not_monotonic', 'media_header_short', 'media_kind_unconfirmed', 'media_layout_unconfirmed', 'media_pcr_gap_limit', 'media_pcr_not_increasing', 'media_pts_bounds', 'media_timestamp_bounds', 'media_startup_limit', 'h264_grid_poc_type_unverified', 'h264_grid_mmco5_unverified', 'network_read_failed', 'network_read_timeout', 'network_write_failed', 'no_playable_grid_video', 'no_playable_grid_audio', 'media_track_coverage_incomplete', 'media_track_coverage_unverified', 'no_usable_server_parent', 'parent_access_denied', 'parent_body_limit', 'parent_discovery_missing', 'parent_header_invalid', 'parent_list_invalid', 'parent_list_length', 'parent_list_short', 'parent_list_trailing_data', 'parent_media_stalled', 'parent_packet_limit', 'parent_quality_changed', 'parent_rediscovery_empty', 'parent_retry_limit', 'password_state_unknown', 'peer_closed_or_truncated', 'private_capture_create_failed', 'public_policy_restricted_or_unknown', 'public_watch_access_denied', 'public_watch_schema_invalid', 'reader_closed', 'reader_timeout', 'reader_shutdown_timeout', 'receiver_closed', 'receiver_internal_failure', 'receiver_thread_start_failed', 'recovery_candidates_exhausted', 'recovery_deadline_exhausted', 'recovery_overlap_unavailable', 'scoped_cookie_invalid', 'sps_chroma', 'sps_cycle_limit', 'sps_dimensions_invalid', 'sps_golomb_limit', 'sps_poc_invalid', 'sps_truncated', 'stream_password_encoding_invalid', 'stream_password_state_mismatch', 'tcp_connect_failed', 'video_prefix_unconfirmed', 'watch_target_changed'])
 
 
-# Module: recovery; source SHA-256: 5eeb74560e2494d69cc429bea4dc0de0e4a0f3182f7a0196110d36f1c98372ff
+# Module: recovery; source SHA-256: 411ea0ce667b6d38b08ed007a111a3a4b5d9588e86c2717eef0712c211eaf9d5
 import hashlib as _sg_recovery_hashlib
 from collections import OrderedDict as _sg_recovery_OrderedDict
 _sg_recovery_GridError = _sg_protocol_GridError
@@ -778,7 +778,7 @@ class _sg_recovery_Continuity:
         raise _sg_recovery_GridError(code)
 
     def accept(self, chunk):
-        identity = (chunk.kind, chunk.timestamp, _sg_recovery_hashlib.sha256(chunk.payload).digest())
+        identity = (chunk.kind, chunk.timestamp, chunk.composition_offset_raw, _sg_recovery_hashlib.sha256(chunk.payload).digest())
         if chunk.frame in self.recent:
             if self.recent[chunk.frame] != identity:
                 self.reject('frame_identity_conflict')
@@ -1182,7 +1182,7 @@ class _sg_mpegts_TSMux:
         return out + self._pes(video, pts, payload, pcr=pts if video else None)
 
 
-# Module: h264clock; source SHA-256: 87795ca798e9d7e25d8e8a4896ce42f33870fa2ccc01d406c8121a835e7f2afa
+# Module: h264clock; source SHA-256: 842e5eef2e4a22ff283af6cd500ffbd29a72e0a1f301e353c10090b3377174d8
 from collections import deque as _sg_h264clock_deque
 from dataclasses import dataclass as _sg_h264clock_dataclass
 from fractions import Fraction as _sg_h264clock_Fraction
@@ -1904,11 +1904,11 @@ class _sg_h264clock_H264Clock:
             self.prev_frame_num_offset = frame_num_offset
         return int(poc)
 
-    def inspect(self, payload, grid_timestamp):
+    def inspect(self, payload, grid_timestamp, composition_offset=None):
         state = self.__dict__.copy()
         state['picture_times'] = _sg_h264clock_deque(self.picture_times, maxlen=self.picture_times.maxlen)
         try:
-            return self._inspect(payload, grid_timestamp)
+            return self._inspect(payload, grid_timestamp, composition_offset)
         except BaseException as error:
             safe_facts = error.safe_facts if isinstance(error, _sg_h264clock_GridError) else None
             self.__dict__.clear()
@@ -1917,12 +1917,19 @@ class _sg_h264clock_H264Clock:
                 self.last_observation = {**self.last_observation, **safe_facts}
             raise
 
-    def _inspect(self, payload, grid_timestamp):
+    def _inspect(self, payload, grid_timestamp, composition_offset=None):
         if type(grid_timestamp) is not int or not 0 <= grid_timestamp < 1 << 64:
             raise _sg_h264clock_GridError('media_timestamp_bounds')
+        if composition_offset is not None:
+            if type(composition_offset) is not int or not 0 <= composition_offset < 1 << 31:
+                raise _sg_h264clock_GridError('grid_composition_offset_unsupported')
+            if grid_timestamp + composition_offset >= 1 << 64:
+                raise _sg_h264clock_GridError('media_timestamp_bounds')
         if self.origin_dts is None and self.preroll_timestamp is not None:
             if self.preroll_frames + 1 > 600 or self.preroll_bytes + len(payload) > 32 << 20 or abs(grid_timestamp - self.preroll_timestamp) > 100000000:
                 raise _sg_h264clock_GridError('h264_start_boundary_unavailable')
+        if self.timing_model is not None and (self.timing_model == 'grid_composition') != (composition_offset is not None):
+            raise _sg_h264clock_GridError('h264_timing_changed')
         units = _sg_h264clock_nals(payload, max_units=256)
         seen_primary_picture = False
         sei_nal_count = 0
@@ -2045,6 +2052,11 @@ class _sg_h264clock_H264Clock:
                 raise _sg_h264clock_GridError('h264_frame_num_gap')
             if sps['poc_type'] == 2 and (not header.nal_ref_idc) and self.previous_nonreference:
                 raise _sg_h264clock_GridError('h264_poc2_nonreference_sequence_invalid')
+        if composition_offset is not None:
+            if sps['poc_type'] == 1:
+                raise _sg_h264clock_GridError('h264_grid_poc_type_unverified')
+            if header.mmco5:
+                raise _sg_h264clock_GridError('h264_grid_mmco5_unverified')
         poc = self._picture_order(header, sps)
         self.last_observation['h264_current_poc'] = poc
         first_picture = self.origin_dts is None
@@ -2069,7 +2081,10 @@ class _sg_h264clock_H264Clock:
         for key in ('cpb_removal_delay', 'dpb_output_delay'):
             if key in picture_timing:
                 self.last_observation['h264_' + key] = picture_timing[key]
-        if sps['nal_hrd'] or sps['vcl_hrd']:
+        if composition_offset is not None:
+            model = 'grid_composition'
+            pts = self._rescale(grid_timestamp + composition_offset - self.origin_dts) + 90000
+        elif sps['nal_hrd'] or sps['vcl_hrd']:
             if 'dpb_output_delay' not in picture_timing:
                 raise _sg_h264clock_GridError('h264_hrd_timing_missing')
             if sps['clock_tick_100ns'] is None:
@@ -2105,6 +2120,8 @@ class _sg_h264clock_H264Clock:
             raise _sg_h264clock_GridError('h264_picture_order_conflict', safe_facts=facts)
         if sum((pts < old_pts for _, old_pts in self.picture_times)) > sps['max_reorder']:
             raise _sg_h264clock_GridError('h264_reorder_bound_invalid')
+        if any((pts == old_pts for _, old_pts in self.picture_times)):
+            raise _sg_h264clock_GridError('h264_picture_order_conflict')
         for old_poc, old_pts in self.picture_times:
             if poc < old_poc and pts >= old_pts or (poc > old_poc and pts <= old_pts):
                 facts = {'h264_current_poc_type': sps['poc_type'], 'h264_current_fixed_vui': int(sps['timing_fixed']), 'h264_current_idr': int(header.idr), 'h264_current_mmco5': int(header.mmco5), 'h264_current_slice_type': header.slice_kind, 'h264_current_poc': poc, 'h264_current_dts_90k': dts, 'h264_current_candidate_pts_90k': pts, 'h264_conflicting_reference_poc': old_poc, 'h264_conflicting_reference_pts_90k': old_pts, 'h264_current_grid_delta_100ns': grid_timestamp - self.last_dts, 'h264_hrd_present': int(bool(sps['nal_hrd'] or sps['vcl_hrd'])), 'h264_sei_timing_present': int('picture_timing' in sei)}
@@ -2136,7 +2153,7 @@ class _sg_h264clock_H264Clock:
         return self._rescale(timestamp_100ns - self.origin_dts) + 90000
 
 
-# Module: media; source SHA-256: afa4cf13a56d0819a5b42390940e3f5968c4521f617ab3540706589cb8c5444f
+# Module: media; source SHA-256: cefb852e3d560b528884f5e0c3160a93e1294cc16cbc6cb6bc510c1e333191c9
 import hashlib as _sg_media_hashlib
 import json as _sg_media_json
 import os as _sg_media_os
@@ -2158,6 +2175,12 @@ class _sg_media_Chunk:
     timestamp: int
     payload: bytes = _sg_media_field(repr=False)
     extension_bytes: int = 0
+    auxiliary_time_raw: int = 0
+    composition_offset_raw: int = 0
+
+    @property
+    def start_timestamp(self):
+        return self.timestamp
 
 def _sg_media_layout_facts(body):
     facts = {'rejected_body_bytes': len(body)}
@@ -2171,17 +2194,23 @@ def _sg_media_parse_media(body):
     header = _sg_media_struct.unpack_from('<H', body, 2)[0]
     extension, size = _sg_media_struct.unpack_from('<II', body, 4)
     start = header + extension
-    if not 69 <= header <= 4096 or extension > 4096 or size < 1 or (start + size != len(body)):
+    if _sg_media_struct.unpack_from('<H', body, 0)[0] != 1 or header != 69 or extension > 4096 or (size < 1) or (start + size != len(body)):
         raise _sg_media_GridError('media_layout_unconfirmed')
     kind = chr(body[40])
     if kind not in ('I', 'P', 'B', 'A'):
         raise _sg_media_GridError('media_kind_unconfirmed')
+    timestamp = _sg_media_struct.unpack_from('<Q', body, 41)[0]
+    composition = _sg_media_struct.unpack_from('<I', body, 57)[0]
+    if composition >= 1 << 31:
+        raise _sg_media_GridError('grid_composition_offset_unsupported')
+    if timestamp + composition >= 1 << 64:
+        raise _sg_media_GridError('media_timestamp_bounds')
     payload = body[start:]
     if kind in ('I', 'P', 'B') and (len(payload) < 4 or payload[:2] != b'\x00\x00'):
         raise _sg_media_GridError('video_prefix_unconfirmed')
     if kind == 'A' and (len(payload) < 7 or payload[0] != 255 or payload[1] & 240 != 240):
         raise _sg_media_GridError('audio_prefix_unconfirmed')
-    return _sg_media_Chunk(_sg_media_struct.unpack_from('<Q', body, 12)[0], kind, _sg_media_struct.unpack_from('<Q', body, 41)[0], payload, extension)
+    return _sg_media_Chunk(_sg_media_struct.unpack_from('<Q', body, 12)[0], kind, timestamp, payload, extension, _sg_media_struct.unpack_from('<Q', body, 49)[0], composition)
 
 class _sg_media_Bits:
 
@@ -2305,7 +2334,12 @@ def _sg_media_adts_info(payload):
 
 class _sg_media_MediaSink:
 
-    def __init__(self, emit, capture_dir=None):
+    def __init__(self, emit, capture_dir=None, *, synchronize_startup=False):
+        self.synchronize_startup = synchronize_startup
+        self.startup_frames = []
+        self.startup_bytes = 0
+        self.startup_audio = None
+        self.startup_video = False
         self.emit = emit
         self.mux = _sg_media_TSMux()
         self.video_clock = _sg_media_H264Clock()
@@ -2413,6 +2447,27 @@ class _sg_media_MediaSink:
                 self.stats['rejected_packet_preservation_failed'] = 1
 
     def add(self, frame, discard=False):
+        if not self.synchronize_startup or discard:
+            return self._add(frame, discard)
+        chunk = _sg_media_parse_media(frame.body)
+        self.startup_frames.append(frame)
+        self.startup_bytes += len(frame.body)
+        if chunk.kind == 'A' and self.startup_audio is None:
+            self.startup_audio = chunk.timestamp
+        elif chunk.kind in ('I', 'P', 'B'):
+            self.startup_video = True
+        if self.startup_bytes > 32 << 20 or len(self.startup_frames) > 600:
+            raise _sg_media_GridError('media_startup_limit')
+        if self.startup_audio is not None and self.startup_video:
+            self.video_clock.observe_audio(self.startup_audio)
+            pending, self.startup_frames = (self.startup_frames, [])
+            self.startup_bytes = 0
+            self.synchronize_startup = False
+            for item in pending:
+                self._add(item)
+        return chunk
+
+    def _add(self, frame, discard=False):
         self.write('grid-wire.bin', frame.wire)
         chunk = _sg_media_parse_media(frame.body)
         self.write('grid-payload.bin', chunk.payload)
@@ -2432,7 +2487,7 @@ class _sg_media_MediaSink:
             self.write('video.h264', chunk.payload)
             self.stats['video_frames'] += 1
             try:
-                timing = self.video_clock.inspect(chunk.payload, chunk.timestamp)
+                timing = self.video_clock.inspect(chunk.payload, chunk.timestamp, chunk.composition_offset_raw)
             finally:
                 self.stats.update(self.video_clock.last_observation)
                 self.stats['video_preroll_frames'] = self.video_clock.preroll_frames
@@ -2537,6 +2592,9 @@ class _sg_media_MediaSink:
         if self.closed:
             return
         self.closed = True
+        self.stats['startup_unoutput_frames'] = len(self.startup_frames)
+        self.startup_frames.clear()
+        self.startup_bytes = 0
         failed = False
         pending_output_error = None
         if self.pending_video is not None:
@@ -3216,7 +3274,7 @@ def _sg_gateway_obtain_certificate(network, session, report):
         network.release(sock)
 
 
-# Module: stream; source SHA-256: b0a3a5c0d6207d921554a6472cfeeb65be0a96e828fb641a0edb16fa4a163f93
+# Module: stream; source SHA-256: 9349a622e60ce8826ce703f653400b77a9f7ebc6f11d18f09816bec934c1cacd
 import threading as _sg_stream_threading
 import time as _sg_stream_time
 import logging as _sg_stream_logging
@@ -3363,7 +3421,7 @@ def _sg_stream_receive(config, network, emit, report, stats):
         credentials = _sg_stream_obtain_certificate(network, session, report)
         session.clear_gateway_auth()
         parents, node_key = _sg_stream_discover_parent(network, session.center, credentials, report)
-        sink = _sg_stream_MediaSink(emit, config.capture_dir)
+        sink = _sg_stream_MediaSink(emit, config.capture_dir, synchronize_startup=True)
         stats.update(sink.stats)
         sink.stats = stats
         _sg_stream_receive_media(network, parents, session.bno, node_key, sink, report, config.duration, config.max_bytes, rediscover=lambda: _sg_stream_discover_parent(network, session.center, credentials, report))

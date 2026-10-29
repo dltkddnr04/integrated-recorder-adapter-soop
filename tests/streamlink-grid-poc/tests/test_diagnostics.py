@@ -380,7 +380,7 @@ def test_cleanup_failure_does_not_replace_parser_failure(monkeypatch):
     monkeypatch.setattr(stream_module, "bootstrap", lambda *a, **k: session)
     monkeypatch.setattr(stream_module, "obtain_certificate", lambda *a: credentials)
     monkeypatch.setattr(stream_module, "discover_parent", lambda *a: ([], 1))
-    monkeypatch.setattr(stream_module, "MediaSink", lambda *a: sink)
+    monkeypatch.setattr(stream_module, "MediaSink", lambda *a, **k: sink)
     monkeypatch.setattr(
         stream_module, "receive_media", lambda *a, **k: (_ for _ in ()).throw(GridError("media_header_short"))
     )
