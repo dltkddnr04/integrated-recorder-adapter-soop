@@ -75,13 +75,52 @@ def test_streamlink_runner_writes_every_reader_byte_through_eof(tmp_path):
 
     assert output_path.read_bytes() == payload
     assert source.stats["stream_reader_bytes"] == len(payload)
+    assert source.stats["stream_emit_bytes"] == source.stats["stream_buffer_accepted_bytes"]
+    assert source.stats["stream_reader_bytes"] == source.stats["stream_buffer_accepted_bytes"]
+    assert source.stats["stream_buffer_discarded_bytes"] == 0
+    assert source.stats["stream_buffer_unaccepted_bytes"] == 0
     assert source.diagnostics.reason == "duration_limit"
     assert "stream_output_discarded_bytes" not in source.stats
+
+
+def test_streamlink_output_write_failure_is_not_a_successful_partial_recording():
+    from streamlink_cli.streamrunner import StreamRunner
+
+    payload = (b"\x47" + b"x" * 187) * 4
+
+    def run(config, network, emit, report, stats):
+        emit(payload)
+        stats["stream_emit_bytes"] = len(payload)
+        stats["stop_reason"] = "duration_limit"
+
+    class FailingOutput:
+        def __init__(self):
+            self.writes = 0
+            self.bytes_written = 0
+
+        def write(self, data):
+            self.writes += 1
+            if self.writes == 2:
+                raise OSError("fixture output disk full")
+            self.bytes_written += len(data)
+
+    source = reader(run, timeout=1, capacity=len(payload)).open()
+    output = FailingOutput()
+    prebuffer = source.read(188)
+    with pytest.raises(OSError, match="Error when writing to output"):
+        StreamRunner(source, output).run(prebuffer)
+    assert output.bytes_written < len(payload)
+    assert source.closed and not source.thread.is_alive()
+    # StreamIO delivery is complete even though the external writer failed;
+    # the StreamRunner exception, not this reader counter, determines CLI success.
+    assert source.stats["stream_reader_bytes"] == len(payload)
+    assert source.stats["stream_emit_bytes"] == len(payload)
 
 
 def test_error_after_pending_bytes_and_no_secret_exception_text():
     def run(c, n, emit, report, stats):
         emit(b"safe")
+        stats["stream_emit_bytes"] = 4
         raise ValueError("fixture-private-password")
 
     r = reader(run).open()
@@ -89,6 +128,9 @@ def test_error_after_pending_bytes_and_no_secret_exception_text():
     with pytest.raises(OSError, match="receiver_internal_failure") as err:
         r.read(1)
     assert "fixture-private" not in str(err.value) and r.closed
+    assert r.stats["stream_reader_bytes"] == r.stats["stream_emit_bytes"] == 4
+    assert r.stats["stream_buffer_accepted_bytes"] == 4
+    assert r.stats["stream_buffer_discarded_bytes"] == r.stats["stream_buffer_unaccepted_bytes"] == 0
 
 
 def test_open_waits_for_actual_output_and_timeout_cleans_worker():
@@ -236,9 +278,17 @@ def test_backpressure_is_bounded_and_error_is_propagated():
     assert not r.thread.is_alive()
 
 
-def test_backpressure_timeout_tracks_stall_not_total_large_emit_time():
+def test_backpressure_timeout_tracks_stall_not_total_large_emit_time(monkeypatch):
     from soop_grid.stream import BoundedBuffer
+    from types import SimpleNamespace
+    import soop_grid.stream as stream_module
 
+    # Advance the producer's monotonic clock only as the consumer makes
+    # progress. Condition handoffs, rather than scheduler-sensitive sleeps,
+    # keep this regression deterministic while total simulated time exceeds
+    # the per-stall budget.
+    clock = [100.0]
+    monkeypatch.setattr(stream_module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
     output = BoundedBuffer(188, timeout=0.06)
     payload = b"x" * (188 * 6)
     errors = []
@@ -255,12 +305,17 @@ def test_backpressure_timeout_tracks_stall_not_total_large_emit_time():
     thread.start()
     received = bytearray()
     while len(received) < len(payload):
-        time.sleep(0.02)
-        received.extend(output.read(94))
+        with output.condition:
+            assert output.condition.wait_for(lambda: len(output.data) >= 188 or output.eof, timeout=1)
+            assert len(output.data) >= 188
+            received.extend(output.read(94))
+            clock[0] += 0.04
+            received.extend(output.read(94))
     thread.join(1)
     assert not thread.is_alive()
     assert not errors
     assert received == payload
+    assert clock[0] - 100.0 > output.timeout
 
 
 def test_concurrent_close_unblocks_read_and_closes_socket():
@@ -457,6 +512,8 @@ def test_close_with_undrained_duration_output_is_not_reported_as_success():
     assert output.stats["stream_buffer_discarded_bytes"] == len(payload)
     assert output.stats["stream_buffer_unaccepted_bytes"] == 0
     assert output.stats["stream_output_drain_complete"] == 0
+    assert output.stats["stream_emit_bytes"] == output.stats["stream_buffer_accepted_bytes"] == len(payload)
+    assert output.stats.get("stream_reader_bytes", 0) == 0
     assert output.buffer.data == b""
 
 
@@ -504,6 +561,8 @@ def test_fully_drained_duration_output_remains_successful():
     assert output.diagnostics.reason == "duration_limit"
     assert "stream_output_discarded_bytes" not in output.stats
     assert output.stats["stream_output_drain_complete"] == 1
+    assert output.stats["stream_emit_bytes"] == output.stats["stream_reader_bytes"]
+    assert output.stats["stream_reader_bytes"] == output.stats["stream_buffer_accepted_bytes"]
 
 
 def test_user_cancel_preserves_cancellation_reason_with_queued_output():
@@ -518,5 +577,6 @@ def test_user_cancel_preserves_cancellation_reason_with_queued_output():
     assert not output.thread.is_alive()
     assert output.diagnostics.reason == "user_cancelled"
     assert output.stats["stream_output_discarded_bytes"] == len(payload)
+    assert output.stats["stream_output_drain_complete"] == 0
     output.close()
     assert output.stats["stream_output_discarded_bytes"] == len(payload)

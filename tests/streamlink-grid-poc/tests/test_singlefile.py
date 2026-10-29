@@ -30,8 +30,8 @@ def bundle():
 
 def test_reproducible_build_and_no_runtime_loader(tmp_path):
     builder = load(ROOT / "tools" / "build_singlefile.py", "soop_builder_unit")
-    first = builder.build().encode()
-    second = builder.build().encode()
+    first = builder.build().encode("utf-8")
+    second = builder.build().encode("utf-8")
     assert first == second == (ROOT / "dist" / "soop_grid.py").read_bytes()
     assert hashlib.sha256(first).digest() == hashlib.sha256(second).digest()
     tree = ast.parse(first, feature_version=(3, 10))
@@ -44,6 +44,24 @@ def test_reproducible_build_and_no_runtime_loader(tmp_path):
             assert node.func.id not in ("exec", "eval", "__import__")
     assert b"sys.path" not in first and b"zipimport" not in first
     assert b"SPDX-License-Identifier: AGPL-3.0-only" in first
+
+
+def test_builder_canonicalizes_source_newlines_and_utf8(tmp_path, monkeypatch):
+    builder = load(ROOT / "tools" / "build_singlefile.py", "soop_builder_newlines")
+    outputs = []
+    for index, newline in enumerate((b"\n", b"\r\n", b"\r")):
+        root = tmp_path / str(index)
+        (root / "soop_grid").mkdir(parents=True)
+        (root / "plugins").mkdir()
+        (root / "soop_grid" / "base.py").write_bytes(
+            "LABEL = 'left ↔ right'\n".replace("\n", "\n").encode("utf-8").replace(b"\n", newline)
+        )
+        (root / "plugins" / "soop_grid.py").write_bytes(
+            b"from soop_grid.base import LABEL\n__plugin__ = LABEL\n".replace(b"\n", newline)
+        )
+        monkeypatch.setattr(builder, "ROOT", root)
+        outputs.append(builder.build().encode("utf-8"))
+    assert outputs[0] == outputs[1] == outputs[2]
 
 
 def test_bundle_identity_dataclasses_and_golden_packets(bundle, golden):

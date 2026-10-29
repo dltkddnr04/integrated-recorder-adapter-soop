@@ -105,27 +105,38 @@ def official_hls_streams(session, url, account, password, stream_password, purge
     help="Ask the built-in SOOP plugin to purge its saved credentials in HLS mode.",
 )
 class SoopGridPlugin(Plugin):
+    @staticmethod
+    def _credential_value(option_value, primary_env, compatibility_env=None):
+        """Resolve an explicit plugin option before the canonical and legacy env vars."""
+        if option_value is not None:
+            return option_value
+        if primary_env in os.environ:
+            return os.environ[primary_env]
+        if compatibility_env and compatibility_env in os.environ:
+            return os.environ[compatibility_env]
+        return ""
+
     def _get_streams(self):
         transport = self.get_option("transport") or "auto"
         account_option = self.get_option("grid-username")
         legacy_account_option = self.get_option("grid-account")
         if account_option is not None and legacy_account_option is not None:
             raise PluginError("Specify only one of --soop-grid-username and --soop-grid-account")
-        account = (
-            account_option
-            if account_option is not None
-            else legacy_account_option
-            if legacy_account_option is not None
-            else os.environ.get("SOOP_ACCOUNT_ID", "")
+        account = self._credential_value(
+            account_option if account_option is not None else legacy_account_option,
+            "SOOP_GRID_USERNAME",
+            "SOOP_ACCOUNT_ID",
         )
-        account_password = self.get_option("grid-password")
-        if account_password is None:
-            account_password = os.environ.get("SOOP_ACCOUNT_PASSWORD", "")
-        stream_password = self.get_option("grid-stream-password")
-        if stream_password is None:
-            stream_password = os.environ.get("SOOP_STREAM_PASSWORD", "")
+        account_password = self._credential_value(
+            self.get_option("grid-password"), "SOOP_GRID_PASSWORD", "SOOP_ACCOUNT_PASSWORD"
+        )
+        stream_password = self._credential_value(
+            self.get_option("grid-stream-password"),
+            "SOOP_GRID_STREAM_PASSWORD",
+            "SOOP_STREAM_PASSWORD",
+        )
         purge_credentials = bool(self.get_option("grid-purge-credentials"))
-        if bool(account) != bool(account_password) or stream_password and not account:
+        if bool(account) != bool(account_password):
             raise PluginError("account_credentials_required")
         if transport == "hls":
             try:
@@ -143,6 +154,8 @@ class SoopGridPlugin(Plugin):
                 raise PluginError("The official SOOP plugin returned no HLS streams")
             yield from hls_streams.items()
             return
+        if stream_password and not account:
+            raise PluginError("grid_stream_password_requires_account; use --soop-grid-transport hls")
 
         config = Config(
             broadcaster=self.match["channel"],

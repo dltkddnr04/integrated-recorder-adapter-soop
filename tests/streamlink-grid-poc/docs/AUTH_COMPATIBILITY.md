@@ -1,6 +1,7 @@
 # 인증 인터페이스 호환성 메모
 
 이 문서는 Streamlink 8.6.2의 공개 CLI 동작과 `soop_grid` 외부 플러그인의 인증 입력 경계를 기록합니다.
+내장 구현 비교 기준은 [Streamlink 8.6.2 `plugins/soop.py`](https://github.com/streamlink/streamlink/blob/8.6.2/src/streamlink/plugins/soop.py)입니다.
 
 ## 옵션 전달 차이
 
@@ -9,6 +10,9 @@
 | 계정 ID | `--soop-username` | `--soop-grid-username` (`--soop-grid-account` 별칭) | 별도 namespace |
 | 계정 비밀번호 | `--soop-password` | `--soop-grid-password` | 별도 namespace |
 | 방송 비밀번호 | `--soop-stream-password` | `--soop-grid-stream-password` | 별도 namespace |
+| 계정 ID 환경변수 | 없음 | `SOOP_GRID_USERNAME` (`SOOP_ACCOUNT_ID` 호환 별칭) | 외부 계약 |
+| 계정 비밀번호 환경변수 | 없음 | `SOOP_GRID_PASSWORD` (`SOOP_ACCOUNT_PASSWORD` 호환 별칭) | 외부 계약 |
+| 방송 비밀번호 환경변수 | 없음 | `SOOP_GRID_STREAM_PASSWORD` (`SOOP_STREAM_PASSWORD` 호환 별칭) | 외부 계약 |
 | 인증 쿠키 저장 | 내장 플러그인 캐시를 통해 저장·재사용 | 저장하지 않음. 로그인 세션은 Grid HTTP 세션 안에서만 사용 후 폐기 | 다름 |
 | 자격정보 삭제 | `--soop-purge-credentials` | `--soop-grid-purge-credentials`를 HLS 위임 시 내장 플러그인에 전달 | 외부 명시 옵션 |
 
@@ -28,13 +32,17 @@ streamlink \
 
 비밀번호를 명령행에 넣으면 셸 기록이나 시스템 프로세스 목록에 노출될 수 있습니다. 가능한 경우 다음 환경변수를 사용하세요.
 
-```text
-SOOP_ACCOUNT_ID
-SOOP_ACCOUNT_PASSWORD
-SOOP_STREAM_PASSWORD
+```sh
+export SOOP_GRID_USERNAME='ACCOUNT'
+export SOOP_GRID_PASSWORD='PASSWORD'
+export SOOP_GRID_STREAM_PASSWORD='BROADCAST_PASSWORD'
 ```
 
-각 입력은 외부 플러그인의 명시 옵션, 그에 대응하는 환경변수, 미설정 순서입니다. `--soop-grid-account`는 기존 환경과의 호환 별칭이며, `--soop-grid-username`과 함께 지정하면 오류로 처리합니다. 계정 ID와 계정 비밀번호는 쌍으로 필요합니다. 방송 비밀번호는 계정 비밀번호와 별개입니다. 조회된 세션 계정이 요청한 계정과 일치하지 않거나 서버가 인증을 거부하면 진행하지 않습니다.
+환경변수는 내장 Streamlink `soop` 플러그인의 인터페이스가 아닙니다. 외부 Grid 플러그인과 기존 자동 녹화기 환경의 호환 계약입니다. `SOOP_ACCOUNT_ID`, `SOOP_ACCOUNT_PASSWORD`, `SOOP_STREAM_PASSWORD`는 각각 위 정식 변수의 하위 호환 별칭입니다.
+
+각 값의 우선순위는 명시적인 `--soop-grid-*` CLI 입력 → 해당 `SOOP_GRID_*` 변수 → 이전 환경변수 별칭 → 미설정입니다. 존재하지만 빈 정식 환경변수는 호환 별칭으로 대체되지 않습니다. CLI username/password와 CLI 별칭 `--soop-grid-account`는 동시에 지정할 수 없습니다. 최종 ID와 계정 비밀번호는 둘 다 있거나 둘 다 없어야 하며, 서로 다른 우선순위 단계에서 온 값이어도 완전한 쌍이면 쓸 수 있습니다. 조회된 세션 계정이 요청한 계정과 다르거나 서버가 인증을 거부하면 진행하지 않습니다.
+
+계정 인증 없이 공개 Grid 방송을 수신하는 것은 지원됩니다. 계정 없이 방송 비밀번호만 지정하는 구성은 Native Grid 프로토콜 근거가 없어 지원하지 않습니다. `grid` 및 `auto`는 이를 `grid_stream_password_requires_account` 오류로 거부합니다. Streamlink 내장 `soop`은 방송 비밀번호 단독 입력을 허용하므로 `--soop-grid-transport hls --soop-grid-stream-password ...`를 사용하면 그 옵션을 그대로 위임합니다. Auto는 Grid 인증 거부를 전송 장애로 취급해 HLS로 우회하지 않습니다.
 
 ## 로그인 요청 비교
 
@@ -44,10 +52,14 @@ SOOP_STREAM_PASSWORD
 
 ## HLS 위임 및 자격정보
 
-`hls` 모드와 `auto`의 허용된 초기 Grid 전송 실패 시, 같은 ID·계정 비밀번호·방송 비밀번호를 Streamlink 내장 `soop` 클래스의 공개 생성자 옵션으로 전달합니다. 내장 플러그인은 자체 쿠키 재사용, 로그인 및 세션 검증 정책을 적용합니다. `--soop-grid-purge-credentials`도 위임 시 내장 `purge-credentials` 옵션으로 전달됩니다. 이 명령은 Grid 자체에 저장된 쿠키를 지우는 기능이 아닙니다(Grid는 인증 쿠키를 저장하지 않습니다).
+`hls` 모드와 `auto`의 허용된 초기 Grid 전송 실패 시, 같은 ID·계정 비밀번호·방송 비밀번호를 Streamlink 내장 `soop` 클래스의 공개 생성자 옵션으로 전달합니다. 비밀번호 단독 HLS 구성에서도 username/password는 빈 값으로 유지되고 `stream-password`만 위임됩니다. 내장 플러그인은 자체 쿠키 재사용, 로그인 및 세션 검증 정책을 적용합니다. `--soop-grid-purge-credentials`도 위임 시 내장 `purge-credentials` 옵션으로 전달됩니다.
+
+Purge 동작은 transport별로 다릅니다. `hls`에서는 내장 SOOP 플러그인의 생성 시 쿠키 캐시 삭제가 실행됩니다. `grid`에서는 지울 영속 Grid 쿠키가 없어 아무것도 삭제하지 않습니다. `auto`에서는 Grid가 먼저 실행되며, 허용된 초기 전송 장애로 실제 HLS 위임이 생성될 때만 내장 플러그인의 purge가 적용됩니다. Auto의 Grid 성공·인증 거부·프로토콜 오류에는 내장 쿠키 캐시를 건드리지 않습니다.
 
 인증 거부, 프로토콜/미디어 무결성 오류, Grid 출력이 시작된 뒤에는 HLS fallback을 하지 않습니다. Grid와 HLS 바이트를 하나의 녹화 흐름에 이어 붙이지 않습니다.
 
 ## 확정된 사용자 인터페이스
 
-외부 플러그인의 정식 인증 인터페이스는 `--soop-grid-username`, `--soop-grid-password`, `--soop-grid-stream-password` 및 기존 환경변수입니다. 내장 `--soop-*` 옵션을 외부 플러그인으로 전달하는 기능과 영속 쿠키 캐시 공유는 지원하지 않습니다. 이는 Streamlink의 플러그인별 옵션 경계에 따른 의도된 인터페이스입니다. argparse 조작, 코어 수정, 내장 플러그인 교체 또는 중복 옵션 등록은 사용하지 않습니다.
+외부 플러그인의 정식 인증 인터페이스는 `--soop-grid-username`, `--soop-grid-password`, `--soop-grid-stream-password` 및 `SOOP_GRID_USERNAME`, `SOOP_GRID_PASSWORD`, `SOOP_GRID_STREAM_PASSWORD`입니다. 앞선 `SOOP_ACCOUNT_ID`, `SOOP_ACCOUNT_PASSWORD`, `SOOP_STREAM_PASSWORD` 환경변수는 호환 별칭입니다. 내장 `--soop-*` 옵션을 외부 플러그인으로 전달하는 기능과 영속 쿠키 캐시 공유는 지원하지 않습니다. 이는 Streamlink의 플러그인별 옵션 경계에 따른 의도된 인터페이스입니다. argparse 조작, 코어 수정, 내장 플러그인 교체 또는 중복 옵션 등록은 사용하지 않습니다.
+
+Native Grid는 현재 단일 `original` stream을 제공합니다. Streamlink 8.6.2의 `best`/`worst` 별칭은 이 하나뿐인 Grid stream으로 해석됩니다. 이는 Grid에서 추가 화질을 선택할 수 있음을 뜻하지 않습니다. HLS 위임은 내장 `soop`의 실제 품질 목록을 유지하며, 자동 fallback은 Grid `original`에 대응하는 HLS `original`을 우선 열고, `original`이 없을 때만 내장 `best` 별칭을 사용합니다.

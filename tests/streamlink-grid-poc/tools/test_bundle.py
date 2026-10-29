@@ -27,22 +27,33 @@ def main():
     class Facade(types.ModuleType):
         def __getattr__(self, name):
             mapping = self.__dict__["mapping"]
-            if name in mapping:
-                return bundle.__dict__[mapping[name]]
+            target = mapping.get(name)
+            if target in bundle.__dict__:
+                return bundle.__dict__[target]
             raise AttributeError(name)
 
         def __setattr__(self, name, value):
             mapping = self.__dict__.get("mapping", {})
-            if name in mapping:
-                bundle.__dict__[mapping[name]] = value
-            else:
-                super().__setattr__(name, value)
+            target = mapping.get(name)
+            if target in bundle.__dict__:
+                bundle.__dict__[target] = value
+            super().__setattr__(name, value)
+
+        def __delattr__(self, name):
+            mapping = self.__dict__.get("mapping", {})
+            target = mapping.get(name)
+            if target in bundle.__dict__:
+                del bundle.__dict__[target]
+            super().__delattr__(name)
 
     for name, mapping in bundle.__grid_names__.items():
         if name == "plugin":
             continue
         facade = Facade("soop_grid." + name)
         facade.mapping = mapping
+        for alias, target in mapping.items():
+            if target in bundle.__dict__:
+                types.ModuleType.__setattr__(facade, alias, bundle.__dict__[target])
         facade.__file__ = str(ROOT / "dist" / "soop_grid.py")
         sys.modules[facade.__name__] = facade
         setattr(package, name, facade)

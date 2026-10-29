@@ -385,6 +385,12 @@ the transient Session clears its Cookie and ticket. Bootstrap clears account inp
 and closes its private HTTP Cookie Jar; issued credentials are cleared on reader
 shutdown. Python immutable strings/bytes cannot be guaranteed zeroized in memory.
 
+The current preferred environment names are `SOOP_GRID_USERNAME`,
+`SOOP_GRID_PASSWORD`, and `SOOP_GRID_STREAM_PASSWORD`. The former
+`SOOP_ACCOUNT_ID`, `SOOP_ACCOUNT_PASSWORD`, and `SOOP_STREAM_PASSWORD` names
+remain compatibility aliases; these are the external plugin's contract, not
+environment variables provided by Streamlink's built-in SOOP plugin.
+
 The mux now tracks minimum and maximum unwrapped PTS for the media timeline extent;
 the old statistic used only the last decode-order PTS and understated/reported the
 wrong span for reordered pictures. This affects summary metadata, not serialized

@@ -214,6 +214,8 @@ class MediaSink:
         self.payload_hash = hashlib.sha256()
         self.video_output_hash = hashlib.sha256()
         self.audio_output_hash = hashlib.sha256()
+        self.video_output_pts_window = deque(maxlen=32)
+        self.audio_output_group_duration_window = deque(maxlen=32)
         self.last_frame = None
         try:
             if self.path:
@@ -249,13 +251,28 @@ class MediaSink:
             payload, timing = video
             self.video_output_hash.update(payload)
             self.stats["video_output_frames"] += 1
+            pts = timing["pts"]
+            self.video_output_pts_window.append(pts)
+            self.stats["video_output_first_pts_90k"] = min(
+                pts, self.stats.get("video_output_first_pts_90k", pts)
+            )
+            self.stats["video_output_end_pts_90k"] = max(pts, self.stats.get("video_output_end_pts_90k", pts))
             self.stats["video_parameter_prefix_bytes"] = self.stats.get(
                 "video_parameter_prefix_bytes", 0
             ) + len(timing["decoder_prefix"])
-        for payload, units, samples in audio:
+        for payload, units, samples, pts in audio:
             self.audio_output_hash.update(payload)
             self.stats["audio_output_access_units"] += units
             self.stats["audio_output_core_samples"] += samples
+            start = int(pts)
+            end = pts + Fraction(samples * 90000, self.audio_config.sample_rate)
+            end = (end.numerator + end.denominator - 1) // end.denominator
+            self.stats["audio_output_first_pts_90k"] = min(
+                start, self.stats.get("audio_output_first_pts_90k", start)
+            )
+            self.stats["audio_output_end_pts_90k"] = max(end, self.stats.get("audio_output_end_pts_90k", end))
+            self.stats["audio_output_last_packet_duration_90k"] = max(0, end - start)
+            self.audio_output_group_duration_window.append(max(0, end - start))
 
     def _flush_pending_video(self):
         if self.pending_video is None:
@@ -275,7 +292,7 @@ class MediaSink:
         if ts:
             for timestamp, audio_payload, units, samples in pending_audio:
                 ts += self.mux.add_audio(self.video_clock.audio_pts(timestamp), audio_payload)
-                audio_for_emit.append((audio_payload, units, samples))
+                audio_for_emit.append((audio_payload, units, samples, self.video_clock.audio_pts(timestamp)))
             self._record_output(ts, video=(payload, timing), audio=audio_for_emit)
         if pending_record is not None:
             pending_record.update(
@@ -443,7 +460,7 @@ class MediaSink:
                     for timestamp, payload, units, samples in self.pending_audio:
                         audio_pts = self.video_clock.audio_pts(timestamp)
                         ts += self.mux.add_audio(audio_pts, payload)
-                        audio_for_emit.append((payload, units, samples))
+                        audio_for_emit.append((payload, units, samples, audio_pts))
         elif not self.mux.started:
             if self.pending_audio_bytes + len(chunk.payload) > 1 << 20 or len(self.pending_audio) >= 64:
                 raise GridError("audio_preroll_limit")
@@ -454,7 +471,7 @@ class MediaSink:
         else:
             audio_pts = self.video_clock.audio_pts(sample_clock_timestamp)
             ts = self.mux.add_audio(audio_pts, chunk.payload)
-            audio_for_emit.append((chunk.payload, audio.access_unit_count, audio.core_samples))
+            audio_for_emit.append((chunk.payload, audio.access_unit_count, audio.core_samples, audio_pts))
         if ts:
             self._record_output(
                 ts,
@@ -515,14 +532,62 @@ class MediaSink:
         self.stats["video_output_sha256"] = self.video_output_hash.hexdigest()
         self.stats["audio_output_sha256"] = self.audio_output_hash.hexdigest()
         self.stats["playable_video_frames"] = self.stats["video_output_frames"]
+        video_pts = tuple(sorted(set(self.video_output_pts_window)))
+        video_steps = sorted(
+            right - left for left, right in zip(video_pts, video_pts[1:], strict=False) if right > left
+        )
+        video_step = video_steps[len(video_steps) // 2] if video_steps else 0
+        audio_group_steps = sorted(self.audio_output_group_duration_window)
+        audio_group_step = audio_group_steps[len(audio_group_steps) // 2] if audio_group_steps else 0
+        video_duration = (
+            self.stats.get("video_output_end_pts_90k", 0)
+            - self.stats.get("video_output_first_pts_90k", 0)
+            + video_step
+        )
+        audio_duration = self.stats.get("audio_output_end_pts_90k", 0) - self.stats.get(
+            "audio_output_first_pts_90k", 0
+        )
+        if not self.stats["video_output_frames"] or not self.stats["audio_output_access_units"]:
+            span_status = "incomplete"
+        elif not video_step or not self.stats.get("audio_output_last_packet_duration_90k"):
+            span_status = "unverified"
+        else:
+            video_start = self.stats.get("video_output_first_pts_90k", 0)
+            video_end = self.stats.get("video_output_end_pts_90k", 0)
+            audio_start = self.stats.get("audio_output_first_pts_90k", 0)
+            audio_end = self.stats.get("audio_output_end_pts_90k", 0)
+            # The presentation interval of the final video picture includes
+            # its observed cadence. Use the same end model for overlap and
+            # duration checks.
+            video_window_end = video_end + video_step
+            windows_overlap = video_start <= audio_end and audio_start <= video_window_end
+            # This is a coarse track-span consistency check, not an A/V sync
+            # proof. Grid/HRD epoch semantics and external capture boundaries
+            # are not established by these counters.
+            # A single unusually large AAC bundle must not mask a stalled
+            # track. Bound endpoint granularity by the median of recent output
+            # bundles rather than the last (or largest-ever) bundle.
+            edge = max(video_step, audio_group_step)
+            delta = video_duration - audio_duration
+            self.stats["av_output_coverage_delta_90k"] = delta
+            self.stats["av_output_coverage_edge_90k"] = edge
+            self.stats["av_output_start_offset_90k"] = audio_start - video_start
+            self.stats["av_output_end_offset_90k"] = audio_end - video_end
+            span_status = "incomplete" if not windows_overlap or abs(delta) > edge else "consistent"
+        self.stats["av_track_span_status"] = span_status
         if self.mux.first_pts is not None:
             self.stats["media_timeline_seconds"] = (self.mux.max_pts - self.mux.min_pts) / 90000
         if self.owns_directory:
             path = self.path / "grid-analysis.json"
             try:
                 fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 384)
+                capture_stats = dict(self.stats)
+                # StreamIO drain is finalized only after the consumer reads
+                # EOF; this per-sink file cannot truthfully record that value.
+                capture_stats.pop("stream_output_drain_complete", None)
+                capture_stats["stream_output_drain_status"] = "pending_at_media_close"
                 with os.fdopen(fd, "w") as f:
-                    json.dump(self.stats, f, indent=2)
+                    json.dump(capture_stats, f, indent=2)
             except FileExistsError:
                 pass
             except OSError:

@@ -190,7 +190,13 @@ class Linker(ast.NodeTransformer):
 def build():
     paths = {p.stem: p for p in sorted((ROOT / "soop_grid").glob("*.py")) if p.stem != "__init__"}
     paths["plugin"] = ROOT / "plugins" / "soop_grid.py"
-    sources = {name: p.read_text() for name, p in paths.items()}
+    # Git may check out text files with CRLF on Windows.  Decode explicitly and
+    # canonicalize newlines before parsing and hashing so the artifact is byte
+    # identical across OSes, locales, and Python default encodings.
+    sources = {
+        name: p.read_bytes().decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+        for name, p in paths.items()
+    }
     trees = {name: ast.parse(source) for name, source in sources.items()}
     tables = {name: symtable.symtable(source, str(paths[name]), "exec") for name, source in sources.items()}
     names = {
@@ -259,21 +265,22 @@ def main():
     parser.add_argument("--output", type=Path, default=ROOT / "dist" / "soop_grid.py")
     args = parser.parse_args()
     result = build()
-    digest = hashlib.sha256(result.encode()).hexdigest()
+    result_bytes = result.encode("utf-8")
+    digest = hashlib.sha256(result_bytes).hexdigest()
     checksum = args.output.parent / "SHA256SUMS"
-    checksum_text = f"{digest}  {args.output.name}\n"
+    checksum_bytes = f"{digest}  {args.output.name}\n".encode("ascii")
     if args.check:
         if (
             not args.output.exists()
-            or args.output.read_text() != result
+            or args.output.read_bytes() != result_bytes
             or not checksum.exists()
-            or checksum.read_text() != checksum_text
+            or checksum.read_bytes() != checksum_bytes
         ):
             raise SystemExit("single-file output stale; regenerate")
     else:
         args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(result)
-        checksum.write_text(checksum_text)
+        args.output.write_bytes(result_bytes)
+        checksum.write_bytes(checksum_bytes)
     print(digest)
 
 

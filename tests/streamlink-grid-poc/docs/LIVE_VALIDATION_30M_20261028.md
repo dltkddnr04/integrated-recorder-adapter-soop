@@ -37,13 +37,39 @@ from this repository.
 
 ## Independent full-file verification
 
-The first verification attempt had a 600-second total wall-clock limit and
-timed out before reaching EOF; it is not treated as a media failure or pass.
-A second read-only verification with a longer wall-clock allowance completed
-with exit 0 and `verdict=pass`. Its scope was structural, decode, and timing
-validation; it did not independently hash-match source Grid payloads to every
-output PES. The verifier's path-free aggregate JSON is available as
-[`LIVE_VALIDATION_30M_20261028.json`](LIVE_VALIDATION_30M_20261028.json).
+The retained [`LIVE_VALIDATION_30M_20261028.json`](LIVE_VALIDATION_30M_20261028.json)
+is **not a full-file decode pass**: its single 1,800-second budget was consumed
+before FFmpeg and the AAC validator reached EOF. It reports `timed_out=true`,
+partial decoded coverage of 1,637.5 seconds, and `verdict=fail` for validation
+timeout/minimum-duration gates. Those results are incomplete evidence, not a
+codec-failure finding. On 2026-10-28, a separate direct FFmpeg run decoded the
+entire video elementary output and audio output from the retained TS using raw
+outputs (avoiding the null-muxer's timestamp-quantization warnings): video
+exit 0 in 505.232 seconds, audio exit 0 in 5.125 seconds, and zero FFmpeg
+diagnostic bytes for either run.
+
+An independent PES extraction compared the full source elementary streams
+against the final TS. H.264 source and PES were both 1,798,277,036 bytes with
+108,010 access units and SHA-256
+`6b56f092188e559c949cb4ca5754e867ab7442982e4839e9703ef7f013f06fbd`. AAC
+source and PES were both 43,790,621 bytes with SHA-256
+`654301291fc3fa34e016fe4b769fb7199e4e7fa5e19ce6a1bc30b95bd3e7506e`; parsing
+found 84,375 AAC access units, 86,400,000 samples/channel, and no trailing
+bytes. The generated decoder prefix was 0 bytes in this capture. The path-free
+PES/TS scan reports zero truncated/extra/orphan PES payload bytes, zero TS sync,
+continuity, PCR, DTS, PSI CRC/structure errors, and 10,086,527 TS packets.
+This PES identity result is separate from the timed-out aggregate verifier.
+
+The user output `recording.ts` and `private-capture/recording.ts` were compared
+read-only: `cmp` matched and both SHA-256 values are
+`bd7d77237ba9d698bd655f90347790bcb4b63546559377cfefca9ddcc1e09ea6`. Receiver
+emit, StreamIO accepted and consumed byte counts were all 1,896,267,076, with
+zero discarded/unaccepted bytes and the final process summary showing drain
+complete. The capture-time `grid-analysis.json` has an older
+`stream_output_drain_complete=0`; it was serialized when MediaSink closed,
+before the reader's final drain. The new code records that field as pending in
+the per-sink capture file and reserves the final drain result for the reader
+summary.
 
 - Decoded H.264: 108,010 pictures over 1,800.093667 seconds.
 - Decoded AAC: 84,375 access units, no trailing bytes; 86,400,000 PCM samples
@@ -53,10 +79,12 @@ output PES. The verifier's path-free aggregate JSON is available as
 - PCR: 108,010 samples, zero regressions; largest value step 25 ms.
 - Video and audio packet timestamps were present; DTS regressions, PTS-before-DTS,
   packet timestamp overlaps, and malformed packet rows were zero.
-- FFmpeg full decode and AAC access-unit scan completed without diagnostics.
+- Independent full FFmpeg video and audio decode completed without diagnostics;
+  decoded audio PCM count was independently measured as 345,600,000 bytes
+  (86,400,000 samples/channel, 1,800.000 seconds).
 - TS SHA-256: `bd7d77237ba9d698bd655f90347790bcb4b63546559377cfefca9ddcc1e09ea6`.
 
-The independent verifier reported an audio/video coverage-offset change of
+The retained aggregate verifier reported an audio/video coverage-offset change of
 `-93.667 ms` (start offset `-130 ms`, end offset approximately `-223.667 ms`).
 These are decoded track-coverage boundary comparisons, not a source-clock drift
 measurement or perceptual lip-sync test.
@@ -83,3 +111,34 @@ meaningful long-run evidence, but not proof of every supported H.264 timing
 variant, B-frame live behavior on this exact run, natural-failure recovery over
 30 minutes, or universal zero-loss operation. Overall readiness remains
 **PARTIAL / Experimental-Beta**.
+
+## Post-audit replay on 2026-10-29
+
+The source and generated bundle under test at the time of the 2026-10-29
+timeline-audit replay (`6d456f0e94c7ae8beb4eaa0bb5cee47b860c918e37ad5a967c7a6dd863751ed2`,
+before the later authentication-interface edits) were replayed against both retained 30-minute raw Grid captures. NFS originals
+were read-only; replay output was compared in memory with the archived final TS.
+
+- For `400f…`, the replay emitted 1,896,267,076 TS bytes with SHA-256
+  `bd7d77237ba9d698bd655f90347790bcb4b63546559377cfefca9ddcc1e09ea6`,
+  byte-for-byte matching the archived TS. The 108,010-frame H.264 and 84,375-AU
+  AAC payload hashes matched their retained elementary-stream hashes; the new
+  track-span gate reported `consistent`.
+- For the B-frame `03b31e…` capture, the replay emitted 1,662,461,064 TS bytes
+  with SHA-256
+  `5c275e5d1f307d53431b891da4c0f714467d43c37d92e848b9b7cdb5abbbba82`,
+  byte-for-byte matching the archived TS. The 108,107-frame H.264 and 84,456-AU
+  AAC payload hashes matched the retained elementary-stream hashes; the new
+  track-span gate reported `consistent`. This is an offline replay of retained
+  live Grid bytes, not a new 30-minute recording with the current bundle.
+
+A separate bounded Grid-only live smoke test used the current bundle, a
+12-second duration limit, and no HLS fallback. It produced a 12,132,392-byte
+TS with H.264 1920x1080 at 60 fps and AAC 48 kHz stereo. The independent
+verifier passed: 64,534 TS packets, zero sync/continuity/PSI/PCR/DTS errors,
+zero PTS-before-DTS, 790 decoded video frames, 624 AAC access units, and
+638,976 decoded audio samples per channel. Decoded track coverage was about
+13.2 seconds; its approximately 95 ms boundary-offset change is not evidence
+of perceptual synchronization. The sandboxed attempt failed before media
+access; the single network-enabled retry succeeded. This short capture does
+not constitute a long-duration test.

@@ -132,25 +132,34 @@ streamlink --soop-grid-username USER --soop-grid-password PASS \
 
 위 명령행 입력은 셸 기록이나 프로세스 목록에 남을 수 있으므로 환경변수 방식을 권장합니다. Streamlink 8.6.2에서는 `--soop-username`과 `--soop-password`가 내장 `soop` 플러그인 옵션 공간에만 전달되어 외부 `soop_grid`에서 읽을 수 없습니다. 중복 옵션 등록은 CLI 충돌을 일으키므로 지원하지 않습니다. 상세 근거는 [인증 호환성 메모](AUTH_COMPATIBILITY.md)를 확인하세요.
 
-방송 비밀번호는 계정 비밀번호와 별개이며, `--soop-grid-stream-password` 또는 `SOOP_STREAM_PASSWORD`로 전달합니다.
+방송 비밀번호는 계정 비밀번호와 별개이며 `--soop-grid-stream-password` 또는 정식 환경변수 `SOOP_GRID_STREAM_PASSWORD`로 전달합니다. 기존 자동 녹화기 환경변수 `SOOP_STREAM_PASSWORD`도 호환 별칭입니다.
 
 ```sh
-export SOOP_ACCOUNT_ID='ACCOUNT_ID'
-read -r -s -p 'SOOP account password: ' SOOP_ACCOUNT_PASSWORD
+export SOOP_GRID_USERNAME='ACCOUNT_ID'
+read -r -s -p 'SOOP account password: ' SOOP_GRID_PASSWORD
 printf '\n'
-export SOOP_ACCOUNT_PASSWORD
+export SOOP_GRID_PASSWORD
 streamlink --soop-grid-transport grid --soop-grid-require-adult \
   'https://play.sooplive.com/CHANNEL_ID/BNO' original -o recording.ts
-unset SOOP_ACCOUNT_ID SOOP_ACCOUNT_PASSWORD
+unset SOOP_GRID_USERNAME SOOP_GRID_PASSWORD
 ```
 
-`--soop-grid-username`, `--soop-grid-password`, `--soop-grid-stream-password`를 지정하면 각 명시 옵션이 대응 환경변수보다 우선합니다. `--soop-grid-account`는 username의 별칭이며 둘 다 지정하면 오류입니다. 계정 ID/비밀번호는 함께 제공해야 합니다.
+정식 환경변수는 `SOOP_GRID_USERNAME`, `SOOP_GRID_PASSWORD`, `SOOP_GRID_STREAM_PASSWORD`입니다. 기존 `SOOP_ACCOUNT_ID`, `SOOP_ACCOUNT_PASSWORD`, `SOOP_STREAM_PASSWORD`는 호환 별칭입니다. 각 입력의 우선순위는 명시 CLI 옵션 → 정식 환경변수 → 기존 호환 환경변수입니다. 명시적으로 빈 CLI/정식 환경변수 값도 입력된 값으로 취급하며, 우선순위가 낮은 값으로 대체하지 않습니다. ID와 계정 비밀번호는 각각 독립적으로 해석한 뒤 둘 다 있거나 둘 다 없어야 합니다. `--soop-grid-account`는 username CLI 별칭이며 둘을 함께 지정하면 오류입니다.
 
-플러그인은 Grid 계정 로그인을 위해 first-party HTTP Cookie Jar를 일시 사용하고 요청 종료 후 폐기합니다. Grid 자격 쿠키를 저장하거나 내장 `soop` 플러그인 캐시와 공유하지 않습니다. `--soop-grid-purge-credentials`는 `hls` 또는 Auto fallback으로 내장 플러그인에 위임될 때만 해당 플러그인의 저장 인증정보 삭제를 요청합니다. Grid 모드에서 삭제할 저장 쿠키는 없습니다.
+방송 비밀번호만 필요한 경우에는 공식 HLS 위임을 사용할 수 있습니다. 내장 SOOP 플러그인은 계정 로그인 없이 방송 비밀번호를 허용합니다.
+
+```sh
+streamlink --soop-grid-transport hls --soop-grid-stream-password BROADCAST_PASSWORD \
+  'https://play.sooplive.com/CHANNEL_ID/BNO' best -o recording.ts
+```
+
+Native Grid의 방송 비밀번호는 계정 인증 세션에서 전달되므로 계정 없이 방송 비밀번호만 사용하는 동작은 지원되지 않습니다. `auto`는 계정 없는 Grid 인증 거부를 일반 전송 장애로 오인해 HLS로 우회하지 않으므로 이 경우 `hls`를 명시해야 합니다.
+
+플러그인은 Grid 계정 로그인을 위해 first-party HTTP Cookie Jar를 일시 사용하고 요청 종료 후 폐기합니다. Grid 자격 쿠키를 저장하거나 내장 `soop` 플러그인 캐시와 공유하지 않습니다. `--soop-grid-purge-credentials`는 `hls` 또는 허용된 Auto fallback에서 내장 플러그인에 위임될 때만 해당 플러그인의 저장 인증정보 삭제를 요청합니다. Grid 모드에는 삭제할 영속 인증 캐시가 없습니다.
 
 플러그인은 방송 비밀번호를 정상 Center JOIN 경로로 전달합니다.
 
-Native Grid에서는 검증된 `original`만 선택할 수 있습니다. `best` 등 실제 Grid 화질 매핑이 확인되지 않은 선택을 지원한다고 표시하지 않습니다. HLS 모드에서는 내장 `soop` 플러그인이 제공하는 화질 목록과 선택 동작을 그대로 사용합니다.
+Native Grid는 `original` 하나를 제공합니다. Streamlink 8.6.2의 `best`와 `worst` 별칭도 이 단일 Grid stream을 선택하지만, 별도 Grid 화질 선택 기능은 아닙니다. HLS 모드에서는 내장 `soop` 플러그인이 제공하는 화질 목록과 선택 동작을 그대로 사용합니다.
 
 이 플러그인은 성인 인증, 구독·유료 권한, 방송 비밀번호, CAPTCHA 또는 서비스의 접근 제한을 우회하지 않습니다. 계정 인증 및 보호 방송 호환성은 방송과 서버 상태에 따라 달라질 수 있습니다.
 

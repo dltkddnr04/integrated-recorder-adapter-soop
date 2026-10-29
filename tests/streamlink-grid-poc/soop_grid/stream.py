@@ -37,6 +37,19 @@ _INITIAL_TRANSPORT_FAILURES = {
 }
 
 
+def validate_media_output(stats):
+    """Reject a nominally successful stop when output lacks A/V coverage."""
+    if not stats.get("video_output_frames"):
+        raise GridError("no_playable_grid_video")
+    if not stats.get("audio_output_access_units"):
+        raise GridError("no_playable_grid_audio")
+    span_status = stats.get("av_track_span_status")
+    if span_status == "incomplete":
+        raise GridError("media_track_coverage_incomplete")
+    if span_status != "consistent":
+        raise GridError("media_track_coverage_unverified")
+
+
 class BoundedBuffer:
     def __init__(self, capacity, timeout):
         if (
@@ -174,8 +187,6 @@ def receive(config, network, emit, report, stats):
             config.max_bytes,
             rediscover=lambda: discover_parent(network, session.center, credentials, report),
         )
-        if not sink.mux.video_frames:
-            raise GridError("no_playable_grid_video")
     except BaseException as error:
         primary = error
         raise
@@ -195,6 +206,10 @@ def receive(config, network, emit, report, stats):
                 session.clear()
             config.clear()
             network.close()
+    # MediaSink.close() flushes the final held IDR and pending output. Only
+    # evaluate playable/track completeness after that drain has succeeded.
+    if primary is None and sink is not None:
+        validate_media_output(sink.stats)
 
 
 class SoopGridReader(StreamIO):

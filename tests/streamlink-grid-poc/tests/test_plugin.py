@@ -50,6 +50,22 @@ def test_default_resolver_selects_grid_plugin_alongside_builtin_soop():
     assert cls(session, url).streams()["original"].shortname() == "auto"
 
 
+@pytest.mark.parametrize("transport", ["grid", "auto"])
+def test_streamlink_best_and_original_select_the_same_single_grid_stream(transport):
+    from streamlink_cli.main import resolve_stream_name
+
+    session = Streamlink()
+    session.plugins.load_builtin()
+    session.plugins.load_path(str(ROOT / "plugins"))
+    url = "https://play.sooplive.com/fixture_channel/12345"
+    cls = session.resolve_url(url)[1]
+    streams = cls(session, url, options={"transport": transport}).streams()
+    assert streams["original"] is streams["best"] is streams["worst"]
+    assert resolve_stream_name(streams, "original") == "original"
+    assert resolve_stream_name(streams, "best") == "original"
+    assert streams["best"].shortname() == ("grid" if transport == "grid" else "auto")
+
+
 def test_modular_cli_sideload_from_unrelated_directory(tmp_path):
     env = os.environ.copy()
     for k in (
@@ -86,6 +102,9 @@ def test_cli_debug_enumeration_does_not_log_secret_environment_values(tmp_path):
     env = os.environ.copy()
     env["PYTHONPATH"] = str(ROOT)
     env.update(
+        SOOP_GRID_USERNAME="fixture_account",
+        SOOP_GRID_PASSWORD="fixture-private-password",
+        SOOP_GRID_STREAM_PASSWORD="fixture-only",
         SOOP_ACCOUNT_ID="fixture_account",
         SOOP_ACCOUNT_PASSWORD="fixture-private-password",
         SOOP_STREAM_PASSWORD="fixture-only",
@@ -111,6 +130,7 @@ def test_cli_debug_enumeration_does_not_log_secret_environment_values(tmp_path):
     assert p.returncode == 0
     output = p.stdout + p.stderr
     assert "fixture-private-password" not in output and "fixture-only" not in output
+    assert "fixture_account" not in output
 
 
 def test_secrets_are_not_serialized_and_environment_credentials_remain_available(monkeypatch):
@@ -146,6 +166,45 @@ def test_secrets_are_not_serialized_and_environment_credentials_remain_available
             ("legacy_user", "cli_pass"),
         ),
         ({}, {"SOOP_ACCOUNT_ID": "env_user", "SOOP_ACCOUNT_PASSWORD": "env_pass"}, ("env_user", "env_pass")),
+        (
+            {},
+            {"SOOP_GRID_USERNAME": "canonical_user", "SOOP_GRID_PASSWORD": "canonical_pass"},
+            ("canonical_user", "canonical_pass"),
+        ),
+        (
+            {},
+            {
+                "SOOP_GRID_USERNAME": "canonical_user",
+                "SOOP_GRID_PASSWORD": "canonical_pass",
+                "SOOP_ACCOUNT_ID": "compat_user",
+                "SOOP_ACCOUNT_PASSWORD": "compat_pass",
+            },
+            ("canonical_user", "canonical_pass"),
+        ),
+        (
+            {"grid-username": "cli_user"},
+            {
+                "SOOP_GRID_USERNAME": "canonical_user",
+                "SOOP_ACCOUNT_ID": "compat_user",
+                "SOOP_GRID_PASSWORD": "canonical_pass",
+            },
+            ("cli_user", "canonical_pass"),
+        ),
+        (
+            {"grid-account": "legacy_cli_user"},
+            {"SOOP_GRID_PASSWORD": "canonical_pass", "SOOP_ACCOUNT_ID": "compat_user"},
+            ("legacy_cli_user", "canonical_pass"),
+        ),
+        (
+            {},
+            {
+                "SOOP_GRID_USERNAME": "",
+                "SOOP_GRID_PASSWORD": "",
+                "SOOP_ACCOUNT_ID": "ignored",
+                "SOOP_ACCOUNT_PASSWORD": "ignored",
+            },
+            ("", ""),
+        ),
     ],
 )
 def test_external_credentials_cli_precedes_environment(monkeypatch, options, environment, expected):
@@ -159,6 +218,132 @@ def test_external_credentials_cli_precedes_environment(monkeypatch, options, env
     assert (stream.grid.config.account, stream.grid.config.account_password) == expected
     if "SOOP_ACCOUNT_PASSWORD" in environment:
         assert os.environ["SOOP_ACCOUNT_PASSWORD"] == environment["SOOP_ACCOUNT_PASSWORD"]
+    stream.grid.config.clear()
+
+
+def test_cli_explicit_empty_value_overrides_environment_and_is_not_unset(monkeypatch):
+    from streamlink_cli.argparser import ArgumentParser, setup_plugin_args, setup_plugin_options
+
+    monkeypatch.setenv("SOOP_GRID_USERNAME", "environment-user")
+    monkeypatch.setenv("SOOP_GRID_PASSWORD", "environment-password")
+    session = Streamlink()
+    session.plugins.load_path(str(ROOT / "plugins"))
+
+    class UserInput:
+        def ask(self, prompt):
+            raise AssertionError("unexpected prompt")
+
+        def ask_password(self, prompt):
+            raise AssertionError("unexpected prompt")
+
+    session.set_option("user-input-requester", UserInput())
+    url = "https://play.sooplive.com/fixture_channel/12345"
+    cls = session.resolve_url(url)[1]
+    parser = ArgumentParser()
+    setup_plugin_args(session, parser)
+    parsed = parser.parse_args(["--soop-grid-username", ""])
+    grid_options = setup_plugin_options(session, parsed, "soop_grid", cls)
+    assert grid_options.get("grid-username") == ""
+    with pytest.raises(PluginError, match="account_credentials_required"):
+        cls(session, url, options=grid_options).streams()
+
+
+def test_canonical_grid_environment_and_cli_stream_password_precedence(monkeypatch):
+    monkeypatch.setenv("SOOP_GRID_USERNAME", "canonical_user")
+    monkeypatch.setenv("SOOP_GRID_PASSWORD", "canonical_password")
+    monkeypatch.setenv("SOOP_GRID_STREAM_PASSWORD", "canon-pass")
+    monkeypatch.setenv("SOOP_STREAM_PASSWORD", "compat-pass")
+    session = Streamlink()
+    session.plugins.load_path(str(ROOT / "plugins"))
+    url = "https://play.sooplive.com/fixture_channel/12345"
+    cls = session.resolve_url(url)[1]
+    environment_stream = cls(session, url).streams()["original"]
+    assert environment_stream.grid.config.stream_password == "canon-pass"
+    environment_stream.grid.config.clear()
+    stream = cls(session, url, options={"grid-stream-password": "cli-pass"}).streams()["original"]
+    assert stream.grid.config.stream_password == "cli-pass"
+    stream.grid.config.clear()
+
+
+def test_explicit_empty_stream_password_suppresses_environment_fallback(monkeypatch):
+    monkeypatch.setenv("SOOP_GRID_USERNAME", "fixture_user")
+    monkeypatch.setenv("SOOP_GRID_PASSWORD", "fixture-password")
+    monkeypatch.setenv("SOOP_GRID_STREAM_PASSWORD", "canon-pass")
+    monkeypatch.setenv("SOOP_STREAM_PASSWORD", "compat-pass")
+    session = Streamlink()
+    session.plugins.load_path(str(ROOT / "plugins"))
+    url = "https://play.sooplive.com/fixture_channel/12345"
+    cls = session.resolve_url(url)[1]
+    stream = cls(session, url, options={"grid-stream-password": ""}).streams()["original"]
+    assert stream.grid.config.stream_password == ""
+    stream.grid.config.clear()
+
+
+def test_stream_password_only_is_hls_compatible_but_not_grid_or_auto(monkeypatch):
+    from streamlink.stream.stream import Stream
+
+    session = Streamlink()
+    session.plugins.load_path(str(ROOT / "plugins"))
+    url = "https://play.sooplive.com/fixture_channel/12345"
+    cls = session.resolve_url(url)[1]
+    module = sys.modules[cls.__module__]
+    received = []
+
+    class HLS(Stream):
+        __shortname__ = "hls"
+
+        def open(self):
+            raise AssertionError("test must only enumerate")
+
+    monkeypatch.setattr(
+        module,
+        "official_hls_streams",
+        lambda *args: received.append(args) or {"best": HLS(session)},
+    )
+    hls = cls(
+        session,
+        url,
+        options={"transport": "hls", "grid-stream-password": "broadcast-only"},
+    ).streams()
+    assert "best" in hls and hls["best"] is hls["worst"]
+    assert received[-1][2:] == ("", "", "broadcast-only", False)
+    for transport in ("grid", "auto"):
+        with pytest.raises(PluginError, match="grid_stream_password_requires_account"):
+            cls(
+                session,
+                url,
+                options={"transport": transport, "grid-stream-password": "broadcast-only"},
+            ).streams()
+
+
+def test_builtin_soop_accepts_accountless_stream_password_and_purge_option():
+    from soop_grid.stream import official_hls_plugin
+
+    session = Streamlink()
+    session.plugins.load_builtin()
+    plugin = official_hls_plugin(
+        session,
+        "https://play.sooplive.com/fixture_channel/12345",
+        "",
+        "",
+        "broadcast-pass",
+        purge_credentials=True,
+    )
+    assert type(plugin).__name__ == "Soop"
+    assert type(plugin).__module__ == "streamlink.plugins.soop"
+    assert plugin.options.get("username") == ""
+    assert plugin.options.get("password") == ""
+    assert plugin.options.get("stream-password") == "broadcast-pass"
+    assert plugin.options.get("purge-credentials") is True
+
+
+def test_public_grid_without_account_remains_supported():
+    session = Streamlink()
+    session.plugins.load_path(str(ROOT / "plugins"))
+    url = "https://play.sooplive.com/fixture_channel/12345"
+    cls = session.resolve_url(url)[1]
+    stream = cls(session, url).streams()["original"]
+    assert stream.grid.config.account == stream.grid.config.account_password == ""
     stream.grid.config.clear()
 
 
@@ -195,27 +380,36 @@ def test_stream_password_cli_precedes_environment_without_mutating_environment(m
     stream.grid.config.clear()
 
 
-def test_auto_grid_and_hls_fallback_receive_the_same_credentials():
+def test_auto_grid_and_hls_fallback_receive_the_same_credentials(monkeypatch):
+    monkeypatch.setenv("SOOP_GRID_USERNAME", "canonical_user")
+    monkeypatch.setenv("SOOP_GRID_PASSWORD", "canonical-password")
+    monkeypatch.setenv("SOOP_GRID_STREAM_PASSWORD", "canon-pass")
+    monkeypatch.setenv("SOOP_ACCOUNT_ID", "compat_user")
+    monkeypatch.setenv("SOOP_ACCOUNT_PASSWORD", "compat-password")
+    monkeypatch.setenv("SOOP_STREAM_PASSWORD", "compat-pass")
     session = Streamlink()
     session.plugins.load_path(str(ROOT / "plugins"))
     url = "https://play.sooplive.com/fixture_channel/12345"
     cls = session.resolve_url(url)[1]
-    stream = cls(
-        session,
-        url,
-        options={
-            "grid-username": "fixture_user",
-            "grid-password": "fixture-password",
-            "grid-stream-password": "fixture-pass",
-        },
-    ).streams()["original"]
+    stream = cls(session, url).streams()["original"]
     assert stream.shortname() == "auto"
     assert (
         stream.grid.config.account,
         stream.grid.config.account_password,
         stream.grid.config.stream_password,
-    ) == (stream.fallback.account, stream.fallback.password, stream.fallback.stream_password)
-    assert "fixture-password" not in repr(stream) and "fixture-pass" not in repr(stream)
+    ) == ("canonical_user", "canonical-password", "canon-pass")
+    assert (
+        stream.grid.config.account,
+        stream.grid.config.account_password,
+        stream.grid.config.stream_password,
+    ) == (
+        stream.fallback.account,
+        stream.fallback.password,
+        stream.fallback.stream_password,
+    )
+    assert "canonical-password" not in repr(stream) and "canon-pass" not in repr(stream)
+    stream.grid.config.clear()
+    stream.fallback.clear()
 
 
 def test_streamlink_862_routes_official_options_only_to_builtin_soop():
@@ -249,6 +443,7 @@ def test_streamlink_862_routes_official_options_only_to_builtin_soop():
             "grid_password",
             "--soop-grid-stream-password",
             "grid_stream_password",
+            "--soop-grid-purge-credentials",
         ]
     )
     plugins = session.plugins.get_loaded()
@@ -263,6 +458,7 @@ def test_streamlink_862_routes_official_options_only_to_builtin_soop():
         "grid_password",
     )
     assert grid_options.get("grid-stream-password") == "grid_stream_password"
+    assert grid_options.get("grid-purge-credentials") is True
     assert not any(key.startswith("soop_") for key in vars(grid_options))
 
 

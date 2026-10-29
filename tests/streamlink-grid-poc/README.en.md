@@ -58,11 +58,11 @@ When omitted, the transport option defaults to `auto`, which tries Native Grid f
 - A roughly 600-second recording and three Cache-assisted recoveries after client-side Parent socket closes in one session were verified in controlled experiments. This does not guarantee lossless recovery from every failure.
 - Automatic account reauthentication, reliable classification of broadcast end versus network failure, and automatic broadcast-number changes are not supported.
 - Support is limited to validated subsets of H.264 timing/POC structures and ADTS AAC. Multi-Parent simultaneous reception is not supported.
-- Native Grid exposes only the verified `original` stream. HLS uses the quality choices provided by Streamlink's built-in `soop` plugin.
+- Native Grid exposes one `original` stream. Streamlink 8.6.2's `best` and `worst` aliases resolve to that same Grid stream; this does not add Grid quality levels. HLS retains the quality list from the built-in `soop` plugin.
 - If Cache overlap and continuity cannot be verified, reception fails rather than inventing data. Three seconds without media may trigger recovery.
 - Optional raw diagnostic capture can consume substantial disk space and synchronous I/O. It is disabled by default.
 - Windows/macOS runtime, all broadcast conditions, and long-run A/V drift have not been verified.
-- For authenticated broadcasts, use `--soop-grid-username` and `--soop-grid-password`, or `SOOP_ACCOUNT_ID` / `SOOP_ACCOUNT_PASSWORD`. Streamlink's built-in `--soop-username` / `--soop-password` options are not passed to the external plugin. The broadcast password is separate: `--soop-grid-stream-password` or `SOOP_STREAM_PASSWORD`.
+- For authentication, use the external plugin options `--soop-grid-username`, `--soop-grid-password`, and `--soop-grid-stream-password`, or `SOOP_GRID_USERNAME`, `SOOP_GRID_PASSWORD`, and `SOOP_GRID_STREAM_PASSWORD`. The previous recorder variables `SOOP_ACCOUNT_ID`, `SOOP_ACCOUNT_PASSWORD`, and `SOOP_STREAM_PASSWORD` remain compatibility aliases. Built-in `--soop-*` options are not passed to the external plugin. A broadcast password without an account can be delegated to the built-in plugin with `--soop-grid-transport hls`; accountless broadcast-password use is unsupported for Grid and Auto.
 
 See [limitations](docs/LIMITATIONS.md), the [pre-release static audit](docs/PRE_RELEASE_STATIC_AUDIT.md), [live failover validation](docs/LIVE_FAILOVER_VALIDATION.md), and [comprehensive hardening and field validation](docs/COMPREHENSIVE_HARDENING.md) for evidence and boundaries.
 

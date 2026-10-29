@@ -108,6 +108,9 @@ audio_chunk_overlap_100ns audio_max_chunk_overlap_100ns audio_clock_drift_100ns
 video_preroll_frames video_preroll_bytes
 video_parameter_prefix_bytes
 video_output_frames playable_video_frames
+video_output_first_pts_90k video_output_end_pts_90k audio_output_first_pts_90k audio_output_end_pts_90k
+audio_output_last_packet_duration_90k av_output_coverage_delta_90k av_output_coverage_edge_90k
+av_output_start_offset_90k av_output_end_offset_90k
 """.split()
 )
 
@@ -123,6 +126,7 @@ parent_stalled parent_retry_exhausted center_rediscovery_failed authentication_d
 cache_overlap_unavailable frame_sequence_gap media_timestamp_invalid media_timing_unconfirmed buffer_backpressure
 duration_limit_output_incomplete disk_write_error receiver_internal_error receiver_error
 stream_output_incomplete
+media_track_coverage_incomplete media_track_coverage_unverified
 receiver_completed_unknown""".split()
 )
 MAX_EVENT_LOG_BYTES = 16 << 20
@@ -168,6 +172,12 @@ def stop_reason(error):
         return "duration_limit_output_incomplete"
     if code == "stream_output_incomplete":
         return "stream_output_incomplete"
+    if code == "media_track_coverage_incomplete":
+        return "media_track_coverage_incomplete"
+    if code == "no_playable_grid_audio":
+        return "media_track_coverage_incomplete"
+    if code == "media_track_coverage_unverified":
+        return "media_track_coverage_unverified"
     if code == "peer_closed_or_truncated":
         return "network_eof"
     if code in ("network_read_timeout", "reader_timeout"):
@@ -259,6 +269,9 @@ class Diagnostics:
         catchup_state = data.get("catchup_state")
         if catchup_state in ("not_started", "unverified_live_boundary"):
             result["catchup_state"] = catchup_state
+        span_status = data.get("av_track_span_status")
+        if span_status in ("consistent", "incomplete", "unverified"):
+            result["av_track_span_status"] = span_status
         recovery_failure_code = data.get("recovery_failure_code")
         if recovery_failure_code in ERROR_CODES:
             result["recovery_failure_code"] = recovery_failure_code
@@ -632,6 +645,9 @@ ERROR_CODES = frozenset(
         "network_read_timeout",
         "network_write_failed",
         "no_playable_grid_video",
+        "no_playable_grid_audio",
+        "media_track_coverage_incomplete",
+        "media_track_coverage_unverified",
         "no_usable_server_parent",
         "parent_access_denied",
         "parent_body_limit",

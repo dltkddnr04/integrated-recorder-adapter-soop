@@ -13,7 +13,15 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def isolate_live_credentials(monkeypatch):
-    for name in ("SOOP_ACCOUNT_ID", "SOOP_ACCOUNT_PASSWORD", "SOOP_STREAM_PASSWORD", "SOOP_GRID_CAPTURE_DIR"):
+    for name in (
+        "SOOP_GRID_USERNAME",
+        "SOOP_GRID_PASSWORD",
+        "SOOP_GRID_STREAM_PASSWORD",
+        "SOOP_ACCOUNT_ID",
+        "SOOP_ACCOUNT_PASSWORD",
+        "SOOP_STREAM_PASSWORD",
+        "SOOP_GRID_CAPTURE_DIR",
+    ):
         monkeypatch.delenv(name, raising=False)
 
 

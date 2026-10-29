@@ -58,12 +58,12 @@ streamlink 'https://play.sooplive.com/CHANNEL_ID/BNO' original -o recording.ts
 - 제어된 실험에서 약 600초 녹화와 한 세션의 Parent 소켓 종료 3회 후 Cache 기반 복구를 확인했습니다. 이는 모든 장애에서의 무손실 보장이 아닙니다.
 - 자동 계정 재인증, 방송 종료와 네트워크 장애의 완전한 구분, 방송 번호 자동 전환은 지원하지 않습니다.
 - 지원 범위는 검증된 H.264 timing/POC 구조와 ADTS AAC 일부입니다. 다중 Parent 동시 수신은 지원하지 않습니다.
-- Native Grid에서는 검증된 `original` 스트림만 제공합니다. HLS 모드는 내장 `soop` 플러그인이 제공하는 화질 선택을 사용합니다.
+- Native Grid는 `original` 하나만 제공하며 Streamlink 8.6.2의 `best`/`worst` 별칭도 같은 Grid stream을 선택합니다. 이는 Grid 화질이 여러 개라는 뜻은 아닙니다. HLS 모드는 내장 `soop` 플러그인의 실제 화질 목록을 사용합니다.
 - Cache Overlap과 연속성을 확인할 수 없으면 데이터를 추정하지 않고 오류로 종료합니다. 3초간 미디어가 없으면 장애 복구를 시도할 수 있습니다.
 - 선택적 진단 JSONL은 최대 16 MiB에서 기록을 멈추며, 수신 스레드에 추가 I/O 부담을 줍니다. 기본 녹화에서는 켜지지 않습니다.
 - Native Grid TCP 연결에는 플러그인이 TLS를 추가하지 않으며 일부 인증 관련 값이 프로토콜 패킷에 포함됩니다. 신뢰할 수 있는 네트워크에서만 사용하세요.
 - Windows/macOS 런타임, 모든 방송 조건, 장기 A/V drift는 검증되지 않았습니다.
-- 인증 방송에는 `--soop-grid-username`과 `--soop-grid-password` 또는 `SOOP_ACCOUNT_ID` / `SOOP_ACCOUNT_PASSWORD`를 사용합니다. Streamlink 내장 `--soop-username` / `--soop-password`는 외부 플러그인에 전달되지 않습니다. 방송 비밀번호는 `--soop-grid-stream-password` 또는 `SOOP_STREAM_PASSWORD`로 별도 지정합니다.
+- 인증 입력은 외부 플러그인 전용 `--soop-grid-username`, `--soop-grid-password`, `--soop-grid-stream-password` 및 `SOOP_GRID_USERNAME`, `SOOP_GRID_PASSWORD`, `SOOP_GRID_STREAM_PASSWORD`를 사용합니다. 이전 자동 녹화기 환경변수 `SOOP_ACCOUNT_ID`, `SOOP_ACCOUNT_PASSWORD`, `SOOP_STREAM_PASSWORD`도 호환 별칭으로 유지됩니다. 내장 `--soop-*` 옵션은 외부 플러그인에 전달되지 않습니다. 방송 비밀번호만 사용하는 방송은 `--soop-grid-transport hls`에서 내장 `soop`으로 위임할 수 있습니다. Grid/Auto에서 계정 없이 방송 비밀번호만 넣는 구성은 지원되지 않습니다.
 
 세부 상태는 [제한사항](docs/LIMITATIONS.md), [정적 사전 감사](docs/PRE_RELEASE_STATIC_AUDIT.md), [실제 장애 복구 검증](docs/LIVE_FAILOVER_VALIDATION.md), [종합 강화·현장 검증](docs/COMPREHENSIVE_HARDENING.md)을 확인하세요.
 

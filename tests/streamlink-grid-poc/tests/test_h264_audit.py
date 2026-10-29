@@ -784,6 +784,8 @@ def test_single_initial_hrd_idr_is_flushed_with_its_parsed_timing_at_eof(tmp_pat
     assert rows[0]["pts_90k"] >= rows[0]["dts_90k"]
     facts = json.loads((capture_dir / "grid-analysis.json").read_text())
     assert facts["video_output_frames"] == 1
+    assert facts["stream_output_drain_status"] == "pending_at_media_close"
+    assert "stream_output_drain_complete" not in facts
 
 
 @pytest.mark.parametrize("nal_hrd,vcl_hrd", [(True, False), (False, True)])
