@@ -1,0 +1,4 @@
+# Generated distribution and its checksum are byte-addressed artifacts.
+# Avoid Windows checkout newline conversion so --check matches the committed bytes.
+tests/streamlink-grid-poc/dist/soop_grid.py -text
+tests/streamlink-grid-poc/dist/SHA256SUMS -text

@@ -258,16 +258,37 @@ def test_heartbeat_thread_continues_during_per_frame_event_storm(tmp_path, monke
 
     monkeypatch.setattr(diagnostics_module, "HEARTBEAT_INTERVAL_SECONDS", 0.01)
     d = Diagnostics(tmp_path / "heartbeat-under-load", lambda: {"video_frames": 1000})
-    d.start()
     stop = threading.Event()
+    two_heartbeats = threading.Event()
+    heartbeat_media_counts = []
+    media_event_count = 0
+    event_count_lock = threading.Lock()
+    original_event = d.event
+
+    def observed_event(stage=None, event="heartbeat"):
+        nonlocal media_event_count
+        if event == "parent_last_media_received":
+            with event_count_lock:
+                media_event_count += 1
+        original_event(stage, event)
+        if event == "heartbeat":
+            with event_count_lock:
+                heartbeat_media_counts.append(media_event_count)
+                if len(heartbeat_media_counts) >= 2:
+                    two_heartbeats.set()
+
+    monkeypatch.setattr(d, "event", observed_event)
+    d.start()
 
     def report_media_progress():
         while not stop.is_set():
             d.event("parent", "parent_last_media_received")
+            time.sleep(0)  # Yield scheduling fairly while retaining event pressure.
 
     producer = threading.Thread(target=report_media_progress)
     producer.start()
-    time.sleep(0.05)
+    assert two_heartbeats.wait(2), "heartbeat worker did not emit periodically under media event load"
+    assert producer.is_alive()
     stop.set()
     producer.join(1)
     assert not producer.is_alive()
@@ -279,6 +300,7 @@ def test_heartbeat_thread_continues_during_per_frame_event_storm(tmp_path, monke
     ]
     assert [row["event"] for row in rows].count("parent_last_media_received") == 1
     assert [row["event"] for row in rows].count("heartbeat") >= 2
+    assert all(count > 0 for count in heartbeat_media_counts[:2])
     assert (
         json.loads((tmp_path / "heartbeat-under-load" / "summary.json").read_text())[
             "diagnostic_events_truncated"
