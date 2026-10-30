@@ -13,8 +13,17 @@ from soop_grid.protocol import Network
 from soop_grid.stream import receive, validate_media_output
 
 
-def sink_with_timeline(video_count, audio_count, *, video_offset=0, audio_offset=0, extra_audio_samples=0):
+def sink_with_timeline(
+    video_count, audio_count, *, video_offset=0, audio_offset=0, extra_audio_samples=0, preroll=False
+):
     output = MediaSink(lambda _data: None)
+    if preroll:
+        output.video_clock.preroll_frames = 30
+        output.video_clock.preroll_timestamp = 0
+        output.video_clock.origin_dts = 0
+        output.first_discarded_vcl_timestamp = 0
+        output.last_discarded_vcl_timestamp = 9833333
+        output.first_output_video_dts = video_offset
     output.audio_config = SimpleNamespace(sample_rate=48000)
     for index in range(video_count):
         output._record_output(
@@ -35,6 +44,20 @@ def sink_with_timeline(video_count, audio_count, *, video_offset=0, audio_offset
         )
     output.close()
     return output.stats
+
+
+def test_explained_preroll_preserves_leading_audio_without_hiding_end_gap():
+    facts = sink_with_timeline(30, 94, video_offset=180000, audio_offset=90000, preroll=True)
+    assert facts["av_track_span_status"] == "consistent"
+    assert facts["av_start_preroll_explained"] == 1
+    validate_media_output(facts)
+    missing_end = sink_with_timeline(10, 94, video_offset=180000, audio_offset=90000, preroll=True)
+    assert missing_end["av_track_span_status"] == "incomplete"
+
+
+def test_unexplained_leading_audio_does_not_become_preroll():
+    facts = sink_with_timeline(30, 94, video_offset=180000, audio_offset=90000)
+    assert facts["av_track_span_status"] == "incomplete"
 
 
 def test_track_span_check_uses_clock_progress_not_payload_identity():

@@ -212,6 +212,9 @@ class MediaSink:
         self.emit = emit
         self.mux = TSMux()
         self.video_clock = H264Clock()
+        self.first_discarded_vcl_timestamp = None
+        self.last_discarded_vcl_timestamp = None
+        self.first_output_video_dts = None
         self.audio_config = None
         self.last_audio_timestamp = None
         self.last_audio_samples = 0
@@ -380,6 +383,12 @@ class MediaSink:
                 self.stats.update(self.video_clock.last_observation)
                 self.stats["video_preroll_frames"] = self.video_clock.preroll_frames
                 self.stats["video_preroll_bytes"] = self.video_clock.preroll_bytes
+            if timing is None and any(unit[0] & 31 == 1 for unit in nals(chunk.payload, max_units=256)):
+                if self.first_discarded_vcl_timestamp is None:
+                    self.first_discarded_vcl_timestamp = chunk.timestamp
+                self.last_discarded_vcl_timestamp = chunk.timestamp
+            elif timing is not None and self.first_output_video_dts is None:
+                self.first_output_video_dts = timing["dts"]
             if "video" not in self.stats:
                 info = sps_info(chunk.payload)
                 if info:
@@ -564,7 +573,28 @@ class MediaSink:
             self.stats["av_output_coverage_edge_90k"] = edge
             self.stats["av_output_start_offset_90k"] = audio_start - video_start
             self.stats["av_output_end_offset_90k"] = audio_end - video_end
-            span_status = "incomplete" if not windows_overlap or abs(delta) > edge else "consistent"
+            preroll_start = self.first_discarded_vcl_timestamp
+            preroll_end = self.last_discarded_vcl_timestamp
+            origin = self.video_clock.origin_dts
+            explained_preroll = (
+                self.video_clock.preroll_frames > 0
+                and preroll_start is not None
+                and preroll_end is not None
+                and self.first_output_video_dts is not None
+                and origin is not None
+                and audio_start < video_start
+                and audio_start >= self.video_clock._rescale(preroll_start - origin) + 90000 - edge
+                and 0
+                <= self.first_output_video_dts - (self.video_clock._rescale(preroll_end - origin) + 90000)
+                <= edge
+                and abs(video_window_end - audio_end) <= edge
+            )
+            self.stats["av_start_preroll_explained"] = int(explained_preroll)
+            span_status = (
+                "incomplete"
+                if not windows_overlap or (abs(delta) > edge and not explained_preroll)
+                else "consistent"
+            )
         self.stats["av_track_span_status"] = span_status
         if self.mux.first_pts is not None:
             self.stats["media_timeline_seconds"] = (self.mux.max_pts - self.mux.min_pts) / 90000
