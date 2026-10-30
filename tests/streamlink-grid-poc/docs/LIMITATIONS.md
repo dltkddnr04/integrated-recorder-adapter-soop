@@ -108,3 +108,9 @@ The AGPL implementation cannot be represented as Streamlink's BSD-licensed code 
 an upstream contribution. Reuse under other licensing would require review and
 permission from relevant rights holders. No upstream Streamlink contribution is part
 of this PoC.
+
+## Legacy HRD retirement
+
+Production requires explicit Grid composition and cannot fall back to HRD or no-reorder PTS estimation. Historical timing comparisons are isolated in the [offline audit tool](LEGACY_HRD_AUDIT.md). SPS/VUI/SEI syntax and POC–PTS checks remain in production. Existing restrictions on POC type 1, Grid MMCO5, interlace, low-delay HRD, nonzero pic_struct and negative composition remain unchanged.
+
+The prior 600.447-second Grid-only run remains LIVE PARTIAL: 18,057 video pictures (no B pictures), 25,905 AAC AUs at 44.1 kHz, full TS decode/structure checks and complete output drain. Raw Grid wire was not retained; source-to-PES identity and perceptual lip-sync were not established for that run. No new live session is part of this refactor.

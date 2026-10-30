@@ -7,6 +7,7 @@ This harness is never distributed inside soop_grid.py. It does not load modular 
 It redirects test imports/monkeypatches to bundled globals in this process only.
 """
 
+import importlib
 import importlib.util
 from pathlib import Path
 import sys
@@ -57,10 +58,16 @@ def main():
         facade.__file__ = str(ROOT / "dist" / "soop_grid.py")
         sys.modules[facade.__name__] = facade
         setattr(package, name, facade)
+    # Offline audit policy stays in tools. Import it only after installing the
+    # facades so its shared parser/POC base is the bundled production class.
+    sys.path.insert(0, str(ROOT))
+    audit = importlib.import_module("tools.legacy_h264_audit")
+    assert audit.LegacyH264Clock.__bases__ == (sys.modules["soop_grid.h264clock"].H264Clock,)
+    assert "legacy_h264_audit" not in bundle.__grid_names__
     import pytest
 
     # Single-file construction tests run separately to avoid recursively testing
-    # this test harness. Every pre-bundle regression/fault test runs unchanged.
+    # this test harness. Regression/fault tests include the external offline audit policy.
     args = [str(ROOT / "tests"), "--ignore=" + str(ROOT / "tests" / "test_singlefile.py"), *sys.argv[1:]]
     raise SystemExit(pytest.main(args))
 

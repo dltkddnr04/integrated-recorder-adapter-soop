@@ -91,3 +91,5 @@ streamlink 'https://play.sooplive.com/CHANNEL_ID/BNO' original -o recording.ts
 이 플러그인과 생성 배포 파일은 **AGPL-3.0-only**입니다. 자세한 내용은 [LICENSE](LICENSE)를 확인하세요. 방송 접근 권한, 저장 권리 및 SOOP 이용 조건을 준수해야 합니다.
 
 현재 시간축 변경의 근거·검증 범위와 미지원 조건은 [Grid composition 적용 결과](docs/GRID_COMPOSITION_TIMING.md)에 있습니다. 새 모델의 장시간 실방송 및 지각적 A/V 동기는 미검증입니다.
+
+생산 H.264 clock은 명시적인 Grid composition만 사용합니다. 구형 HRD/no-reorder 시간축 비교는 [오프라인 감사 도구](docs/LEGACY_HRD_AUDIT.md)로 분리하며 배포 번들에는 포함하지 않습니다. POC–PTS 실시간 검증은 유지합니다.

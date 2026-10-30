@@ -3,10 +3,9 @@
 """Bounded H.264 syntax/POC validation and Grid composition timestamps.
 
 Production supplies explicit raw Grid composition, in 100ns units. POC
-validates display order and never determines elapsed time. The optional
-composition-less parser API retains the historical HRD model for offline
-comparisons; a clock cannot switch timing sources after accepting a picture.
-Grid/HRD clock equality is not assumed. Audio uses the same fixed origin.
+validates display order and never determines elapsed time. HRD metadata is
+parsed and validated but does not supply presentation timestamps. Audio uses
+the same fixed origin. Historical timing comparisons live in tools only.
 """
 
 from collections import deque
@@ -814,16 +813,12 @@ class H264Clock:
         self.prev_frame_num = 0
         self.prev_frame_num_offset = 0
         self.epoch_poc = None
-        self.epoch_pts = None
         self.origin_dts = None
-        self.reorder_lead = None
         self.last_dts = None
         self.last_dts_out = None
         self.last_pts = None
         self.last_poc = None
         self.max_pts = None
-        self.duration = None
-        self.reorder = None
         self.sps_signature = None
         self.parameter_definitions = {}
         self.parameter_nals = {}
@@ -927,7 +922,7 @@ class H264Clock:
             self.prev_frame_num_offset = frame_num_offset
         return int(poc)
 
-    def inspect(self, payload, grid_timestamp, composition_offset=None):
+    def inspect(self, payload, grid_timestamp, composition_offset):
         # Parsing and timeline validation mutate POC, epoch, and parameter-set
         # state. A rejected AU must leave the prior accepted reference state
         # intact, including failures discovered after syntax parsing.
@@ -943,14 +938,10 @@ class H264Clock:
                 self.last_observation = {**self.last_observation, **safe_facts}
             raise
 
-    def _inspect(self, payload, grid_timestamp, composition_offset=None):
+    def _inspect(self, payload, grid_timestamp, composition_offset):
         if type(grid_timestamp) is not int or not 0 <= grid_timestamp < (1 << 64):
             raise GridError("media_timestamp_bounds")
-        if composition_offset is not None:
-            if type(composition_offset) is not int or not 0 <= composition_offset < 1 << 31:
-                raise GridError("grid_composition_offset_unsupported")
-            if grid_timestamp + composition_offset >= 1 << 64:
-                raise GridError("media_timestamp_bounds")
+        self._validate_composition(grid_timestamp, composition_offset)
         if self.origin_dts is None and self.preroll_timestamp is not None:
             if (
                 self.preroll_frames + 1 > 600
@@ -958,10 +949,6 @@ class H264Clock:
                 or abs(grid_timestamp - self.preroll_timestamp) > 100_000_000
             ):
                 raise GridError("h264_start_boundary_unavailable")
-        if self.timing_model is not None and (self.timing_model == "grid_composition") != (
-            composition_offset is not None
-        ):
-            raise GridError("h264_timing_changed")
         units = nals(payload, max_units=256)
         # Validate AU ordering before parsing parameter sets, because parsing
         # them mutates the clock's configuration state. A malformed AU must
@@ -1140,11 +1127,7 @@ class H264Clock:
                 raise GridError("h264_frame_num_gap")
             if sps["poc_type"] == 2 and not header.nal_ref_idc and self.previous_nonreference:
                 raise GridError("h264_poc2_nonreference_sequence_invalid")
-        if composition_offset is not None:
-            if sps["poc_type"] == 1:
-                raise GridError("h264_grid_poc_type_unverified")
-            if header.mmco5:
-                raise GridError("h264_grid_mmco5_unverified")
+        self._validate_timing_subset(header, sps)
         poc = self._picture_order(header, sps)
         self.last_observation["h264_current_poc"] = poc
 
@@ -1156,7 +1139,6 @@ class H264Clock:
                     if self.media_origin_hint is not None
                     else grid_timestamp
                 )
-                self.reorder_lead = 0
             self.epoch_poc = poc
             self.output_epoch_floor = self.max_pts
             self.picture_times.clear()
@@ -1176,35 +1158,10 @@ class H264Clock:
         for key in ("cpb_removal_delay", "dpb_output_delay"):
             if key in picture_timing:
                 self.last_observation["h264_" + key] = picture_timing[key]
-        if composition_offset is not None:
-            model = "grid_composition"
-            pts = self._rescale(grid_timestamp + composition_offset - self.origin_dts) + 90_000
-        elif sps["nal_hrd"] or sps["vcl_hrd"]:
-            if "dpb_output_delay" not in picture_timing:
-                raise GridError("h264_hrd_timing_missing")
-            if sps["clock_tick_100ns"] is None:
-                raise GridError("h264_hrd_clock_unconfirmed")
-            cpb_delay = picture_timing.get("cpb_removal_delay")
-            if cpb_delay is None:
-                raise GridError("h264_hrd_timing_missing")
-            # Grid supplies only a DTS candidate; HRD's DPB output delay
-            # supplies relative PTS. Contradictory ordering fails closed.
-            model = "hrd_sei"
-            pts = dts + self._rescale(picture_timing["dpb_output_delay"] * sps["clock_tick_100ns"])
-        elif sps["max_reorder_zero_proven"]:
-            model = "grid_no_reorder"
-            if header.mmco5:
-                raise GridError("h264_mmco5_timing_unsupported")
-            if not header.idr and self.last_poc is not None and poc <= self.last_poc:
-                raise GridError("h264_picture_order_conflict")
-            pts = dts
-        else:
-            raise GridError("h264_reorder_timing_unconfirmed")
-        if self.timing_model is not None and self.timing_model != model:
-            raise GridError("h264_timing_changed")
+        model, pts = self._presentation_time(header, sps, sei, poc, dts, grid_timestamp, composition_offset)
         self.timing_model = model
         if pts - dts >= 1 << 32:
-            raise GridError("h264_hrd_delay_limit")
+            raise GridError("grid_composition_offset_unsupported")
         if self.output_epoch_floor is not None and pts <= self.output_epoch_floor:
             facts = {
                 "h264_current_poc_type": sps["poc_type"],
@@ -1214,14 +1171,7 @@ class H264Clock:
                 "h264_previous_output_epoch_floor_90k": self.output_epoch_floor,
                 "h264_current_grid_delta_100ns": grid_timestamp - self.last_dts,
             }
-            if model == "hrd_sei":
-                facts["h264_hrd_poc_order_conflicts"] = 1
-                facts["h264_cpb_removal_delay"] = picture_timing["cpb_removal_delay"]
-                facts["h264_dpb_output_delay"] = picture_timing["dpb_output_delay"]
-                tick = sps["clock_tick_100ns"]
-                facts["h264_clock_tick_100ns_numerator"] = tick.numerator
-                facts["h264_clock_tick_100ns_denominator"] = tick.denominator
-            raise GridError("h264_picture_order_conflict", safe_facts=facts)
+            self._raise_order_conflict(facts, sps, sei)
         if sum(pts < old_pts for _, old_pts in self.picture_times) > sps["max_reorder"]:
             raise GridError("h264_reorder_bound_invalid")
         if any(pts == old_pts for _, old_pts in self.picture_times):
@@ -1247,14 +1197,7 @@ class H264Clock:
                     "h264_hrd_present": int(bool(sps["nal_hrd"] or sps["vcl_hrd"])),
                     "h264_sei_timing_present": int("picture_timing" in sei),
                 }
-                if model == "hrd_sei":
-                    facts["h264_hrd_poc_order_conflicts"] = 1
-                    facts["h264_cpb_removal_delay"] = picture_timing["cpb_removal_delay"]
-                    facts["h264_dpb_output_delay"] = picture_timing["dpb_output_delay"]
-                    tick = sps["clock_tick_100ns"]
-                    facts["h264_clock_tick_100ns_numerator"] = tick.numerator
-                    facts["h264_clock_tick_100ns_denominator"] = tick.denominator
-                raise GridError("h264_picture_order_conflict", safe_facts=facts)
+                self._raise_order_conflict(facts, sps, sei)
         self.picture_times.append((poc, pts))
         self.previous_nonreference = not bool(header.nal_ref_idc)
         if header.nal_ref_idc:
@@ -1266,9 +1209,6 @@ class H264Clock:
         self.max_pts = pts if self.max_pts is None else max(self.max_pts, pts)
         return {
             "dts": dts,
-            # None marks a PTS that must be resolved by MediaSink's bounded
-            # POC/VUI scheduler; the internal dts placeholder is only used
-            # for transactional state and is never serialized as a PTS.
             "pts": pts,
             "poc": poc,
             "slice_type": header.slice_kind,
@@ -1287,6 +1227,27 @@ class H264Clock:
             ),
             "units": units,
         }
+
+    @staticmethod
+    def _validate_composition(grid_timestamp, composition_offset):
+        if type(composition_offset) is not int or not 0 <= composition_offset < 1 << 31:
+            raise GridError("grid_composition_offset_unsupported")
+        if grid_timestamp + composition_offset >= 1 << 64:
+            raise GridError("media_timestamp_bounds")
+
+    @staticmethod
+    def _validate_timing_subset(header, sps):
+        if sps["poc_type"] == 1:
+            raise GridError("h264_grid_poc_type_unverified")
+        if header.mmco5:
+            raise GridError("h264_grid_mmco5_unverified")
+
+    def _presentation_time(self, header, sps, sei, poc, dts, grid_timestamp, composition_offset):
+        pts = self._rescale(grid_timestamp + composition_offset - self.origin_dts) + 90_000
+        return "grid_composition", pts
+
+    def _raise_order_conflict(self, facts, sps, sei):
+        raise GridError("h264_picture_order_conflict", safe_facts=facts)
 
     @staticmethod
     def _rescale(timestamp_100ns):

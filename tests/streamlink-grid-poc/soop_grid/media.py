@@ -218,8 +218,6 @@ class MediaSink:
         self.audio_origin_timestamp = None
         self.pending_audio = deque()
         self.pending_audio_bytes = 0
-        self.pending_video = None
-        self.pending_video_record = None
         self.files = {}
         self.path = Path(capture_dir) if capture_dir else None
         self.owns_directory = False
@@ -302,39 +300,6 @@ class MediaSink:
             self.stats["audio_output_end_pts_90k"] = max(end, self.stats.get("audio_output_end_pts_90k", end))
             self.stats["audio_output_last_packet_duration_90k"] = max(0, end - start)
             self.audio_output_group_duration_window.append(max(0, end - start))
-
-    def _flush_pending_video(self):
-        if self.pending_video is None:
-            return
-        timing, payload = self.pending_video
-        pending_record = self.pending_video_record
-        pending_audio = tuple(self.pending_audio)
-        # The muxer advances its decode timeline before the downstream emit
-        # callback runs. Detach staged input first so a write/backpressure
-        # exception cannot cause close() to mux the same IDR or audio twice.
-        self.pending_video = None
-        self.pending_video_record = None
-        self.pending_audio.clear()
-        self.pending_audio_bytes = 0
-        ts = self.mux.add_video(timing["dts"], timing["pts"], payload, idr=timing["idr"])
-        audio_for_emit = []
-        if ts:
-            for timestamp, audio_payload, units, samples in pending_audio:
-                ts += self.mux.add_audio(self.video_clock.audio_pts(timestamp), audio_payload)
-                audio_for_emit.append((audio_payload, units, samples, self.video_clock.audio_pts(timestamp)))
-            self._record_output(ts, video=(payload, timing), audio=audio_for_emit)
-        if pending_record is not None:
-            pending_record.update(
-                pts_90k=timing["pts"],
-                dts_90k=timing["dts"],
-                poc=timing["poc"],
-                slice_type=timing["slice_type"],
-                timing_model=timing["timing_model"],
-            )
-            self.write(
-                "frames.jsonl",
-                (json.dumps(pending_record, sort_keys=True) + "\n").encode(),
-            )
 
     def reject(self, frame, rejection_code="media_packet_rejected", *, wire_already_captured=False):
         if self.owns_directory:
@@ -479,28 +444,12 @@ class MediaSink:
         ts = b""
         video_for_emit = None
         audio_for_emit = []
-        hold_video_record = False
         if chunk.kind in ("I", "P", "B"):
             if timing is not None:
                 mux_payload = timing["decoder_prefix"] + chunk.payload
-                if (
-                    self.pending_video is None
-                    and not self.mux.started
-                    and timing["idr"]
-                    and timing["timing_model"] == "hrd_sei"
-                ):
-                    # Hold the first HRD-timed IDR until the next picture checks
-                    # the candidate POC order. A conflict aborts before either
-                    # candidate reaches the muxer; close may preserve this valid
-                    # IDR as partial output while the original error propagates.
-                    self.pending_video = (timing, mux_payload)
-                    hold_video_record = True
-                else:
-                    if self.pending_video is not None:
-                        self._flush_pending_video()
-                    ts = self.mux.add_video(timing["dts"], timing["pts"], mux_payload, idr=timing["idr"])
-                    if ts:
-                        video_for_emit = mux_payload
+                ts = self.mux.add_video(timing["dts"], timing["pts"], mux_payload, idr=timing["idr"])
+                if ts:
+                    video_for_emit = mux_payload
                 self.stats["last_video_dts_90k"] = timing["dts"]
                 self.stats["last_video_pts_90k"] = timing["pts"]
                 self.stats["last_video_slice_type"] = timing["slice_type"]
@@ -546,14 +495,11 @@ class MediaSink:
                     "slice_type": timing["slice_type"],
                     "timing_model": timing["timing_model"],
                 }
-                if chunk.kind in ("I", "P", "B") and timing is not None and not hold_video_record
+                if chunk.kind in ("I", "P", "B") and timing is not None
                 else {}
             ),
         }
-        if hold_video_record:
-            self.pending_video_record = record
-        else:
-            self.write("frames.jsonl", (json.dumps(record, sort_keys=True) + "\n").encode())
+        self.write("frames.jsonl", (json.dumps(record, sort_keys=True) + "\n").encode())
         return chunk
 
     def close(self):
@@ -564,16 +510,6 @@ class MediaSink:
         self.startup_frames.clear()
         self.startup_bytes = 0
         failed = False
-        pending_output_error = None
-        if self.pending_video is not None:
-            try:
-                # A lone IDR has no later picture that could contradict its
-                # parsed HRD candidate. Preserve that valid candidate at EOF.
-                self._flush_pending_video()
-            except BaseException as error:
-                pending_output_error = error
-                self.pending_video = None
-                self.pending_video_record = None
         for f in self.files.values():
             try:
                 f.close()
@@ -647,7 +583,5 @@ class MediaSink:
                 pass
             except OSError:
                 failed = True
-        if pending_output_error is not None:
-            raise pending_output_error
         if failed:
             raise GridError("capture_close_failed")

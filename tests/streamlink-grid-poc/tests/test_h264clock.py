@@ -13,6 +13,7 @@ import pytest
 from soop_grid.h264clock import H264Clock, parse_pps, parse_sps
 from soop_grid.media import adts_info
 from soop_grid.mpegts import TSMux, nals
+from tools.legacy_h264_audit import LegacyH264Clock
 from soop_grid.protocol import GridError
 
 
@@ -44,8 +45,8 @@ class BitWriter:
         return bytes(output)
 
 
-def test_b_picture_timestamps_come_from_poc_and_grid_clock(encoded_bframes):
-    clock = H264Clock()
+def test_offline_b_picture_timestamps_come_from_hrd_and_grid_clock(encoded_bframes):
+    clock = LegacyH264Clock()
     timed = []
     for index, (access_unit, _grid_kind) in enumerate(encoded_bframes):
         timing = clock.inspect(access_unit, 50_000_000 + index * 333_333)
@@ -117,7 +118,7 @@ def test_invalid_emulation_prevention_byte_is_rejected():
 
 def test_data_partitioned_vcl_is_rejected_explicitly():
     with pytest.raises(GridError, match="h264_vcl_partition_or_extension_unsupported"):
-        H264Clock().inspect(b"\0\0\1\x42\x80", 50_000_000)
+        H264Clock().inspect(b"\0\0\1\x42\x80", 50_000_000, 0)
 
 
 def test_poc1_reference_cycle_and_frame_num_wrap_are_bounded():
@@ -239,7 +240,7 @@ def test_poc2_without_fixed_clock_but_zero_reorder_constraint_decodes(encoded_po
     base = 1_000_000_000
     for index, access_unit in enumerate(encoded_poc2_no_vui):
         timestamp = base + index * 333_333
-        timing = clock.inspect(access_unit, timestamp)
+        timing = clock.inspect(access_unit, timestamp, 0)
         assert timing is not None and timing["pts"] == timing["dts"]
         video.append((timestamp, timing, access_unit))
 
@@ -364,7 +365,7 @@ def test_poc2_b_slice_syntax_does_not_prove_zero_reordering(encoded_poc2_no_vui)
     parsed = parse_slice(b_slice, sps, pps)
     assert parsed.slice_kind == "B"
     clock = H264Clock()
-    assert clock.inspect(idr, 2_000_000_000) is not None
-    timing = clock.inspect(b"\0\0\1" + b_slice, 2_000_333_333)
+    assert clock.inspect(idr, 2_000_000_000, 0) is not None
+    timing = clock.inspect(b"\0\0\1" + b_slice, 2_000_333_333, 0)
     assert timing["poc"] == 1 and timing["pts"] == timing["dts"]
     assert timing["pts"] == timing["dts"]

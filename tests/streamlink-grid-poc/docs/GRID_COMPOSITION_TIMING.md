@@ -20,7 +20,7 @@ PTS = round((startTime + composition - origin) * 90000 / 10000000) + 90000
 
 HRD Picture Timing은 구조적으로 파싱하지만 생산 Grid 경로에서는 DPB delay로 PTS를 생성하지 않는다. SPS/PPS/SEI/slice/Access Unit, POC wrap, POC와 PTS 순서, 재정렬 한도, IDR epoch 순서, 엄격한 DTS 증가와 MPEG-TS 검증은 유지한다. 동일 picture epoch의 중복 PTS도 거부한다.
 
-현재 생산 Grid 경로는 검증된 progressive POC type 0/2를 지원한다. POC type 1, Grid MMCO5, low_delay_hrd, interlace, 미지원 slice 구조 및 midstream codec 변경은 여전히 거부한다. composition 입력이 없는 H264Clock 분석 API는 역사 비교를 위한 기존 HRD 경로를 유지하되 한 clock에서 시간 소스를 전환할 수 없다. 사용자가 선택하는 fallback 옵션이 아니다.
+현재 생산 Grid 경로는 검증된 progressive POC type 0/2를 지원한다. POC type 1, Grid MMCO5, low_delay_hrd, interlace, 미지원 slice 구조 및 midstream codec 변경은 여전히 거부한다. 생산 H264Clock은 composition 입력을 필수로 요구하며 HRD/no-reorder PTS fallback을 제공하지 않는다. 역사적 분석 API는 [독립 감사 도구](LEGACY_HRD_AUDIT.md)로 분리하고 생산 번들에서 제외한다.
 
 AAC-LC의 AU sample 수와 샘플레이트로 정확하게 누적 시간을 계산한다. chunk timestamp의 bounded residual 검사는 그대로 유지하며 매 묶음에서 원점을 바꾸지 않는다. AU 삽입/제거, 무음 생성, resampling이나 임의 A/V 보정은 하지 않는다.
 
@@ -56,6 +56,14 @@ B/D의 AAC 묶음 timestamp 잔차는 각각 0..20ms와 −12..8ms로 bounded한
 
 구현 전 기준 HEAD: `6d8a0095038a9171e9daf647cfd995ba00c9212d`.
 
-최종 검증: 모듈 pytest **614 passed, 0 skipped**, bundle **605 passed, 0 skipped**. FFmpeg/FFprobe `N-128155-g8e362b7b51-20261028`을 사용했다. Ruff check/format, compileall, 결정적 재생성 및 체크섬 검사를 통과했다. 독립 읽기 전용 반증 리뷰에서 검토 범위 내 차단 결함은 발견되지 않았다.
+초기 Grid composition 구현 당시 검증: 모듈 pytest **614 passed, 0 skipped**, bundle **605 passed, 0 skipped**. FFmpeg/FFprobe `N-128155-g8e362b7b51-20261028`을 사용했다. Ruff check/format, compileall, 결정적 재생성 및 체크섬 검사를 통과했다. 독립 읽기 전용 반증 리뷰에서 검토 범위 내 차단 결함은 발견되지 않았다.
 
-배포 번들 SHA-256: `9e08c19e2737b1436da4c439cabd2742a659eca93b1c671c3ce100d940ad591d`.
+초기 구현 번들 SHA-256: `9e08c19e2737b1436da4c439cabd2742a659eca93b1c671c3ce100d940ad591d`.
+
+## HRD 퇴역 시 보존하는 검증
+
+실제 캡처의 composition 830000을 0으로 변조하면 DTS 증가와 PTS >= DTS를 만족해도 H.264 표시 순서와 모순될 수 있다. 따라서 POC–PTS 검사는 생산 경로에 유지한다. 디코딩 성공만으로 timestamp 정합성을 인정하지 않는다. 기존 HRD/SEI 구문 검사는 시간축 생성과 별개로 유지한다.
+
+이전 기준 번들의 600.447초 Grid-only 실행은 LIVE PARTIAL로 보존한다. 18,057 picture, 25,905 AAC AU, B-picture 0이며 전체 TS 디코딩·구조 검사·drain을 통과했다. 원본 wire가 없어 그 실행의 원본 대비 PES 동일성은 미검증이다. 이번 정리는 새로운 실방송을 수행하지 않는다.
+
+HRD 퇴역 리팩터링의 최신 전체 회귀: 모듈 **627 passed, 0 skipped**, 번들 **618 passed, 0 skipped**. 감사 클래스는 번들 밖에서 bundled 생산 파서를 재사용해 역사적 계산을 검증한다. 최신 번들 SHA-256: `27aff828ad815e7e6ba4265b13d7ae4b424a49dff07c50f99bc461ba253bc3c6`.

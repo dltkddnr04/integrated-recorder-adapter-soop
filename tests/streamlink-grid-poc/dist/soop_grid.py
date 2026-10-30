@@ -1182,7 +1182,7 @@ class _sg_mpegts_TSMux:
         return out + self._pes(video, pts, payload, pcr=pts if video else None)
 
 
-# Module: h264clock; source SHA-256: 842e5eef2e4a22ff283af6cd500ffbd29a72e0a1f301e353c10090b3377174d8
+# Module: h264clock; source SHA-256: 76fc7ecbabe3421825b187aae7ad549650c088f636e21d3a7324dcf9674f7fad
 from collections import deque as _sg_h264clock_deque
 from dataclasses import dataclass as _sg_h264clock_dataclass
 from fractions import Fraction as _sg_h264clock_Fraction
@@ -1803,16 +1803,12 @@ class _sg_h264clock_H264Clock:
         self.prev_frame_num = 0
         self.prev_frame_num_offset = 0
         self.epoch_poc = None
-        self.epoch_pts = None
         self.origin_dts = None
-        self.reorder_lead = None
         self.last_dts = None
         self.last_dts_out = None
         self.last_pts = None
         self.last_poc = None
         self.max_pts = None
-        self.duration = None
-        self.reorder = None
         self.sps_signature = None
         self.parameter_definitions = {}
         self.parameter_nals = {}
@@ -1904,7 +1900,7 @@ class _sg_h264clock_H264Clock:
             self.prev_frame_num_offset = frame_num_offset
         return int(poc)
 
-    def inspect(self, payload, grid_timestamp, composition_offset=None):
+    def inspect(self, payload, grid_timestamp, composition_offset):
         state = self.__dict__.copy()
         state['picture_times'] = _sg_h264clock_deque(self.picture_times, maxlen=self.picture_times.maxlen)
         try:
@@ -1917,19 +1913,13 @@ class _sg_h264clock_H264Clock:
                 self.last_observation = {**self.last_observation, **safe_facts}
             raise
 
-    def _inspect(self, payload, grid_timestamp, composition_offset=None):
+    def _inspect(self, payload, grid_timestamp, composition_offset):
         if type(grid_timestamp) is not int or not 0 <= grid_timestamp < 1 << 64:
             raise _sg_h264clock_GridError('media_timestamp_bounds')
-        if composition_offset is not None:
-            if type(composition_offset) is not int or not 0 <= composition_offset < 1 << 31:
-                raise _sg_h264clock_GridError('grid_composition_offset_unsupported')
-            if grid_timestamp + composition_offset >= 1 << 64:
-                raise _sg_h264clock_GridError('media_timestamp_bounds')
+        self._validate_composition(grid_timestamp, composition_offset)
         if self.origin_dts is None and self.preroll_timestamp is not None:
             if self.preroll_frames + 1 > 600 or self.preroll_bytes + len(payload) > 32 << 20 or abs(grid_timestamp - self.preroll_timestamp) > 100000000:
                 raise _sg_h264clock_GridError('h264_start_boundary_unavailable')
-        if self.timing_model is not None and (self.timing_model == 'grid_composition') != (composition_offset is not None):
-            raise _sg_h264clock_GridError('h264_timing_changed')
         units = _sg_h264clock_nals(payload, max_units=256)
         seen_primary_picture = False
         sei_nal_count = 0
@@ -2052,18 +2042,13 @@ class _sg_h264clock_H264Clock:
                 raise _sg_h264clock_GridError('h264_frame_num_gap')
             if sps['poc_type'] == 2 and (not header.nal_ref_idc) and self.previous_nonreference:
                 raise _sg_h264clock_GridError('h264_poc2_nonreference_sequence_invalid')
-        if composition_offset is not None:
-            if sps['poc_type'] == 1:
-                raise _sg_h264clock_GridError('h264_grid_poc_type_unverified')
-            if header.mmco5:
-                raise _sg_h264clock_GridError('h264_grid_mmco5_unverified')
+        self._validate_timing_subset(header, sps)
         poc = self._picture_order(header, sps)
         self.last_observation['h264_current_poc'] = poc
         first_picture = self.origin_dts is None
         if header.idr:
             if self.origin_dts is None:
                 self.origin_dts = min(grid_timestamp, self.media_origin_hint) if self.media_origin_hint is not None else grid_timestamp
-                self.reorder_lead = 0
             self.epoch_poc = poc
             self.output_epoch_floor = self.max_pts
             self.picture_times.clear()
@@ -2081,43 +2066,13 @@ class _sg_h264clock_H264Clock:
         for key in ('cpb_removal_delay', 'dpb_output_delay'):
             if key in picture_timing:
                 self.last_observation['h264_' + key] = picture_timing[key]
-        if composition_offset is not None:
-            model = 'grid_composition'
-            pts = self._rescale(grid_timestamp + composition_offset - self.origin_dts) + 90000
-        elif sps['nal_hrd'] or sps['vcl_hrd']:
-            if 'dpb_output_delay' not in picture_timing:
-                raise _sg_h264clock_GridError('h264_hrd_timing_missing')
-            if sps['clock_tick_100ns'] is None:
-                raise _sg_h264clock_GridError('h264_hrd_clock_unconfirmed')
-            cpb_delay = picture_timing.get('cpb_removal_delay')
-            if cpb_delay is None:
-                raise _sg_h264clock_GridError('h264_hrd_timing_missing')
-            model = 'hrd_sei'
-            pts = dts + self._rescale(picture_timing['dpb_output_delay'] * sps['clock_tick_100ns'])
-        elif sps['max_reorder_zero_proven']:
-            model = 'grid_no_reorder'
-            if header.mmco5:
-                raise _sg_h264clock_GridError('h264_mmco5_timing_unsupported')
-            if not header.idr and self.last_poc is not None and (poc <= self.last_poc):
-                raise _sg_h264clock_GridError('h264_picture_order_conflict')
-            pts = dts
-        else:
-            raise _sg_h264clock_GridError('h264_reorder_timing_unconfirmed')
-        if self.timing_model is not None and self.timing_model != model:
-            raise _sg_h264clock_GridError('h264_timing_changed')
+        model, pts = self._presentation_time(header, sps, sei, poc, dts, grid_timestamp, composition_offset)
         self.timing_model = model
         if pts - dts >= 1 << 32:
-            raise _sg_h264clock_GridError('h264_hrd_delay_limit')
+            raise _sg_h264clock_GridError('grid_composition_offset_unsupported')
         if self.output_epoch_floor is not None and pts <= self.output_epoch_floor:
             facts = {'h264_current_poc_type': sps['poc_type'], 'h264_current_poc': poc, 'h264_current_dts_90k': dts, 'h264_current_candidate_pts_90k': pts, 'h264_previous_output_epoch_floor_90k': self.output_epoch_floor, 'h264_current_grid_delta_100ns': grid_timestamp - self.last_dts}
-            if model == 'hrd_sei':
-                facts['h264_hrd_poc_order_conflicts'] = 1
-                facts['h264_cpb_removal_delay'] = picture_timing['cpb_removal_delay']
-                facts['h264_dpb_output_delay'] = picture_timing['dpb_output_delay']
-                tick = sps['clock_tick_100ns']
-                facts['h264_clock_tick_100ns_numerator'] = tick.numerator
-                facts['h264_clock_tick_100ns_denominator'] = tick.denominator
-            raise _sg_h264clock_GridError('h264_picture_order_conflict', safe_facts=facts)
+            self._raise_order_conflict(facts, sps, sei)
         if sum((pts < old_pts for _, old_pts in self.picture_times)) > sps['max_reorder']:
             raise _sg_h264clock_GridError('h264_reorder_bound_invalid')
         if any((pts == old_pts for _, old_pts in self.picture_times)):
@@ -2125,14 +2080,7 @@ class _sg_h264clock_H264Clock:
         for old_poc, old_pts in self.picture_times:
             if poc < old_poc and pts >= old_pts or (poc > old_poc and pts <= old_pts):
                 facts = {'h264_current_poc_type': sps['poc_type'], 'h264_current_fixed_vui': int(sps['timing_fixed']), 'h264_current_idr': int(header.idr), 'h264_current_mmco5': int(header.mmco5), 'h264_current_slice_type': header.slice_kind, 'h264_current_poc': poc, 'h264_current_dts_90k': dts, 'h264_current_candidate_pts_90k': pts, 'h264_conflicting_reference_poc': old_poc, 'h264_conflicting_reference_pts_90k': old_pts, 'h264_current_grid_delta_100ns': grid_timestamp - self.last_dts, 'h264_hrd_present': int(bool(sps['nal_hrd'] or sps['vcl_hrd'])), 'h264_sei_timing_present': int('picture_timing' in sei)}
-                if model == 'hrd_sei':
-                    facts['h264_hrd_poc_order_conflicts'] = 1
-                    facts['h264_cpb_removal_delay'] = picture_timing['cpb_removal_delay']
-                    facts['h264_dpb_output_delay'] = picture_timing['dpb_output_delay']
-                    tick = sps['clock_tick_100ns']
-                    facts['h264_clock_tick_100ns_numerator'] = tick.numerator
-                    facts['h264_clock_tick_100ns_denominator'] = tick.denominator
-                raise _sg_h264clock_GridError('h264_picture_order_conflict', safe_facts=facts)
+                self._raise_order_conflict(facts, sps, sei)
         self.picture_times.append((poc, pts))
         self.previous_nonreference = not bool(header.nal_ref_idc)
         if header.nal_ref_idc:
@@ -2144,6 +2092,27 @@ class _sg_h264clock_H264Clock:
         return {'dts': dts, 'pts': pts, 'poc': poc, 'slice_type': header.slice_kind, 'idr': header.idr, 'sps': sps, 'sei': sei, 'timing_model': model, 'decoder_prefix': b''.join((b'\x00\x00\x00\x01' + self.parameter_nals[kind, parameter_id] for kind, parameter_id in ((7, sps['id']), (8, pps['id'])) if (kind, parameter_id) not in in_band_parameter_keys)) if first_picture else b'', 'units': units}
 
     @staticmethod
+    def _validate_composition(grid_timestamp, composition_offset):
+        if type(composition_offset) is not int or not 0 <= composition_offset < 1 << 31:
+            raise _sg_h264clock_GridError('grid_composition_offset_unsupported')
+        if grid_timestamp + composition_offset >= 1 << 64:
+            raise _sg_h264clock_GridError('media_timestamp_bounds')
+
+    @staticmethod
+    def _validate_timing_subset(header, sps):
+        if sps['poc_type'] == 1:
+            raise _sg_h264clock_GridError('h264_grid_poc_type_unverified')
+        if header.mmco5:
+            raise _sg_h264clock_GridError('h264_grid_mmco5_unverified')
+
+    def _presentation_time(self, header, sps, sei, poc, dts, grid_timestamp, composition_offset):
+        pts = self._rescale(grid_timestamp + composition_offset - self.origin_dts) + 90000
+        return ('grid_composition', pts)
+
+    def _raise_order_conflict(self, facts, sps, sei):
+        raise _sg_h264clock_GridError('h264_picture_order_conflict', safe_facts=facts)
+
+    @staticmethod
     def _rescale(timestamp_100ns):
         return round(_sg_h264clock_Fraction(timestamp_100ns * 90000, 10000000))
 
@@ -2153,7 +2122,7 @@ class _sg_h264clock_H264Clock:
         return self._rescale(timestamp_100ns - self.origin_dts) + 90000
 
 
-# Module: media; source SHA-256: cefb852e3d560b528884f5e0c3160a93e1294cc16cbc6cb6bc510c1e333191c9
+# Module: media; source SHA-256: e4bacd0829b37d944b5a8f0f48adaed1d76c0026a380576062518e1753bf617c
 import hashlib as _sg_media_hashlib
 import json as _sg_media_json
 import os as _sg_media_os
@@ -2349,8 +2318,6 @@ class _sg_media_MediaSink:
         self.audio_origin_timestamp = None
         self.pending_audio = _sg_media_deque()
         self.pending_audio_bytes = 0
-        self.pending_video = None
-        self.pending_video_record = None
         self.files = {}
         self.path = _sg_media_Path(capture_dir) if capture_dir else None
         self.owns_directory = False
@@ -2404,27 +2371,6 @@ class _sg_media_MediaSink:
             self.stats['audio_output_end_pts_90k'] = max(end, self.stats.get('audio_output_end_pts_90k', end))
             self.stats['audio_output_last_packet_duration_90k'] = max(0, end - start)
             self.audio_output_group_duration_window.append(max(0, end - start))
-
-    def _flush_pending_video(self):
-        if self.pending_video is None:
-            return
-        timing, payload = self.pending_video
-        pending_record = self.pending_video_record
-        pending_audio = tuple(self.pending_audio)
-        self.pending_video = None
-        self.pending_video_record = None
-        self.pending_audio.clear()
-        self.pending_audio_bytes = 0
-        ts = self.mux.add_video(timing['dts'], timing['pts'], payload, idr=timing['idr'])
-        audio_for_emit = []
-        if ts:
-            for timestamp, audio_payload, units, samples in pending_audio:
-                ts += self.mux.add_audio(self.video_clock.audio_pts(timestamp), audio_payload)
-                audio_for_emit.append((audio_payload, units, samples, self.video_clock.audio_pts(timestamp)))
-            self._record_output(ts, video=(payload, timing), audio=audio_for_emit)
-        if pending_record is not None:
-            pending_record.update(pts_90k=timing['pts'], dts_90k=timing['dts'], poc=timing['poc'], slice_type=timing['slice_type'], timing_model=timing['timing_model'])
-            self.write('frames.jsonl', (_sg_media_json.dumps(pending_record, sort_keys=True) + '\n').encode())
 
     def reject(self, frame, rejection_code='media_packet_rejected', *, wire_already_captured=False):
         if self.owns_directory:
@@ -2542,19 +2488,12 @@ class _sg_media_MediaSink:
         ts = b''
         video_for_emit = None
         audio_for_emit = []
-        hold_video_record = False
         if chunk.kind in ('I', 'P', 'B'):
             if timing is not None:
                 mux_payload = timing['decoder_prefix'] + chunk.payload
-                if self.pending_video is None and (not self.mux.started) and timing['idr'] and (timing['timing_model'] == 'hrd_sei'):
-                    self.pending_video = (timing, mux_payload)
-                    hold_video_record = True
-                else:
-                    if self.pending_video is not None:
-                        self._flush_pending_video()
-                    ts = self.mux.add_video(timing['dts'], timing['pts'], mux_payload, idr=timing['idr'])
-                    if ts:
-                        video_for_emit = mux_payload
+                ts = self.mux.add_video(timing['dts'], timing['pts'], mux_payload, idr=timing['idr'])
+                if ts:
+                    video_for_emit = mux_payload
                 self.stats['last_video_dts_90k'] = timing['dts']
                 self.stats['last_video_pts_90k'] = timing['pts']
                 self.stats['last_video_slice_type'] = timing['slice_type']
@@ -2581,11 +2520,8 @@ class _sg_media_MediaSink:
             if self.pending_audio and audio_for_emit:
                 self.pending_audio.clear()
                 self.pending_audio_bytes = 0
-        record = {'frame': chunk.frame, 'type': chunk.kind, 'timestamp_raw': chunk.timestamp, 'payload_bytes': len(chunk.payload), **({'pts_90k': timing['pts'], 'dts_90k': timing['dts'], 'poc': timing['poc'], 'slice_type': timing['slice_type'], 'timing_model': timing['timing_model']} if chunk.kind in ('I', 'P', 'B') and timing is not None and (not hold_video_record) else {})}
-        if hold_video_record:
-            self.pending_video_record = record
-        else:
-            self.write('frames.jsonl', (_sg_media_json.dumps(record, sort_keys=True) + '\n').encode())
+        record = {'frame': chunk.frame, 'type': chunk.kind, 'timestamp_raw': chunk.timestamp, 'payload_bytes': len(chunk.payload), **({'pts_90k': timing['pts'], 'dts_90k': timing['dts'], 'poc': timing['poc'], 'slice_type': timing['slice_type'], 'timing_model': timing['timing_model']} if chunk.kind in ('I', 'P', 'B') and timing is not None else {})}
+        self.write('frames.jsonl', (_sg_media_json.dumps(record, sort_keys=True) + '\n').encode())
         return chunk
 
     def close(self):
@@ -2596,14 +2532,6 @@ class _sg_media_MediaSink:
         self.startup_frames.clear()
         self.startup_bytes = 0
         failed = False
-        pending_output_error = None
-        if self.pending_video is not None:
-            try:
-                self._flush_pending_video()
-            except BaseException as error:
-                pending_output_error = error
-                self.pending_video = None
-                self.pending_video_record = None
         for f in self.files.values():
             try:
                 f.close()
@@ -2658,8 +2586,6 @@ class _sg_media_MediaSink:
                 pass
             except OSError:
                 failed = True
-        if pending_output_error is not None:
-            raise pending_output_error
         if failed:
             raise _sg_media_GridError('capture_close_failed')
 

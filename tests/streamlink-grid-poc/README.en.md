@@ -85,3 +85,5 @@ This Streamlink plugin is separate from the Go-based Integrated Recorder Source 
 The plugin and generated distribution artifact are licensed **AGPL-3.0-only**. See [LICENSE](LICENSE). Users are responsible for respecting broadcast access permissions, recording rights, and SOOP's terms.
 
 See [Grid composition timing validation](docs/GRID_COMPOSITION_TIMING.md) for the current model. New-model live endurance and perceptual A/V sync remain unverified.
+
+The production H.264 clock requires explicit Grid composition. Historical HRD/no-reorder timing comparisons live in the [offline audit tool](docs/LEGACY_HRD_AUDIT.md), excluded from the distributed bundle. Real-time POC–PTS validation remains enabled.

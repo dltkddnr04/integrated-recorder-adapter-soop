@@ -17,6 +17,7 @@ from conftest import media_body
 from soop_grid.h264clock import H264Clock, Reader, inferred_reorder, parse_pps, parse_sei, parse_sps, rbsp
 from soop_grid.media import MediaSink
 from soop_grid.mpegts import TSMux, nals
+from tools.legacy_h264_audit import LegacyH264Clock
 from soop_grid.protocol import Frame, GridError
 
 
@@ -203,7 +204,7 @@ def test_pps_qp_offsets_are_range_checked_against_referenced_sps(unit, code):
 def test_pps_before_sps_qp_range_is_checked_when_sps_arrives():
     clock = H264Clock()
     with pytest.raises(GridError, match="h264_pps_qp_offset_invalid"):
-        clock.inspect(annex(pps(qp=-27), sps(), picture(idr=True)), 50_000_000)
+        clock.inspect(annex(pps(qp=-27), sps(), picture(idr=True)), 50_000_000, 0)
 
 
 def test_pps_scaling_extension_with_six_lists_does_not_require_sps():
@@ -217,7 +218,7 @@ def test_pps_eight_by_eight_scaling_layout_can_precede_sps():
         pps(transform_8x8=True, scaling_matrix=True, chroma_format=1),
         sps(profile=100),
     )
-    clock.inspect(payload, 50_000_000)
+    clock.inspect(payload, 50_000_000, 0)
     assert clock.sps[0]["chroma_format"] == 1
     assert clock.pps[0]["scaling_lists"] == 8
 
@@ -252,14 +253,14 @@ def picture(frame=0, poc=0, *, mode=0, idr=False, idr_id=0, mmco=False, kind=0, 
 
 @pytest.mark.parametrize("mode,cycle", [(0, 2), (1, 4)])
 def test_fixed_vui_and_poc_order_alone_do_not_time_reordered_pictures(mode, cycle):
-    clock = H264Clock()
+    clock = LegacyH264Clock()
     with pytest.raises(GridError, match="h264_reorder_timing_unconfirmed"):
         clock.inspect(annex(sps(mode=mode, cycle=cycle), pps(), picture(mode=mode, idr=True)), 50_000_000)
     assert clock.origin_dts is None
 
 
 def test_type2_nonreference_picture_has_a_whole_output_interval():
-    clock = H264Clock()
+    clock = LegacyH264Clock()
     first = clock.inspect(annex(sps(mode=2, reorder=0), pps(), picture(mode=2, idr=True)), 50_000_000)
     unit = picture(1, mode=2)
     second = clock.inspect(annex(bytes([0x01]) + unit[1:]), 50_333_333)
@@ -268,7 +269,7 @@ def test_type2_nonreference_picture_has_a_whole_output_interval():
 
 
 def test_poc2_requires_explicit_zero_reorder_without_hrd():
-    clock = H264Clock()
+    clock = LegacyH264Clock()
     first = clock.inspect(
         annex(sps(mode=2, fixed=False, reorder=0), pps(), picture(mode=2, idr=True)),
         50_000_000,
@@ -285,7 +286,7 @@ def test_poc2_without_reorder_constraint_or_hrd_fails_before_output():
     assert parsed["max_reorder"] > 0
     assert not parsed["max_reorder_signaled"]
 
-    clock = H264Clock()
+    clock = LegacyH264Clock()
     with pytest.raises(GridError, match="h264_reorder_timing_unconfirmed"):
         clock.inspect(annex(sequence, pps(), picture(mode=2, idr=True)), 50_000_000)
     assert clock.origin_dts is None and clock.last_dts is None
@@ -301,7 +302,7 @@ def test_poc2_accepts_annex_a_inferred_zero_reorder():
     assert parsed["max_reorder"] == 0
     assert not parsed["max_reorder_signaled"]
     assert parsed["max_reorder_zero_proven"]
-    clock = H264Clock()
+    clock = LegacyH264Clock()
     first = clock.inspect(annex(sequence, pps(), picture(mode=2, idr=True)), 50_000_000)
     second = clock.inspect(annex(picture(1, mode=2)), 50_333_333)
     assert first["pts"] == first["dts"] and second["pts"] == second["dts"]
@@ -331,7 +332,7 @@ def test_pps_rejects_reserved_weighted_bipred_value():
 
 
 def test_hrd_cpb_clock_is_not_assumed_to_equal_grid_decode_clock():
-    clock = H264Clock()
+    clock = LegacyH264Clock()
     first = clock.inspect(
         annex(
             sps(mode=2, hrd=True),
@@ -354,7 +355,7 @@ def test_hrd_cpb_clock_is_not_assumed_to_equal_grid_decode_clock():
 
 
 def test_hrd_counter_wrap_does_not_change_grid_derived_dts():
-    clock = H264Clock()
+    clock = LegacyH264Clock()
     first = clock.inspect(
         annex(
             sps(mode=2, hrd=True),
@@ -383,7 +384,7 @@ def test_hrd_buffering_period_reanchors_hrd_without_grid_clock_equality():
         period.put(2, 3)  # initial_cpb_removal_delay_offset
         return sei_message(0, period.finish_rbsp()), timing_sei(cpb=cpb, dpb=0, cpb_bits=8)
 
-    clock = H264Clock()
+    clock = LegacyH264Clock()
     first_bp, first_timing = buffering_period(240)
     first = clock.inspect(annex(seq, pps(), first_bp, first_timing, picture(idr=True, mode=2)), 50_000_000)
     second = clock.inspect(
@@ -413,7 +414,7 @@ def test_hrd_buffering_period_reanchors_hrd_without_grid_clock_equality():
 
 @pytest.mark.parametrize("mode", [1, 2])
 def test_mmco5_without_an_independent_timing_source_fails_closed(mode):
-    clock = H264Clock()
+    clock = LegacyH264Clock()
     clock.inspect(annex(sps(mode=mode, reorder=0), pps(), picture(mode=mode, idr=True)), 50_000_000)
     clock.inspect(annex(picture(1, mode=mode)), 50_333_333)
     with pytest.raises(GridError, match="h264_mmco5_timing_unsupported"):
@@ -425,36 +426,37 @@ def test_different_idr_pic_ids_are_two_pictures():
         H264Clock().inspect(
             annex(sps(), pps(), picture(idr=True, idr_id=1), picture(idr=True, idr_id=2, first_mb=1)),
             50_000_000,
+            0,
         )
 
 
 def test_annexb_trailing_zeros_do_not_corrupt_sps():
     clock = H264Clock()
-    assert clock.inspect(annex(sps()) + b"\0\0\0", 50_000_000) is None
+    assert clock.inspect(annex(sps()) + b"\0\0\0", 50_000_000, 0) is None
     assert clock.sps[0]["width"] == 160
     assert clock.preroll_frames == 1
 
 
 def test_frame_num_width_redefinition_is_rejected():
     clock = H264Clock()
-    clock.inspect(annex(sps(frame_width=4, reorder=0), pps(), picture(idr=True)), 50_000_000)
+    clock.inspect(annex(sps(frame_width=4, reorder=0), pps(), picture(idr=True)), 50_000_000, 0)
     with pytest.raises(GridError, match="h264_codec_configuration_changed"):
-        clock.inspect(annex(sps(frame_width=5, reorder=0)), 50_333_333)
+        clock.inspect(annex(sps(frame_width=5, reorder=0)), 50_333_333, 0)
 
 
 def test_qp_redefinition_is_not_invisible_to_configuration_policy():
     assert pps(0) != pps(1)
     clock = H264Clock()
-    clock.inspect(annex(sps(reorder=0), pps(0), picture(idr=True)), 50_000_000)
+    clock.inspect(annex(sps(reorder=0), pps(0), picture(idr=True)), 50_000_000, 0)
     with pytest.raises(GridError, match="h264_codec_configuration_changed"):
-        clock.inspect(annex(pps(1)), 50_333_333)
+        clock.inspect(annex(pps(1)), 50_333_333, 0)
 
 
 def test_reference_b_with_increasing_poc_is_not_proof_of_reordering():
     """Explicit zero reorder permits B prediction without POC reordering."""
     clock = H264Clock()
-    clock.inspect(annex(sps(fixed=False, reorder=0), pps(), picture(idr=True)), 50_000_000)
-    timed = clock.inspect(annex(picture(1, 2, kind=1)), 50_333_333)
+    clock.inspect(annex(sps(fixed=False, reorder=0), pps(), picture(idr=True)), 50_000_000, 0)
+    timed = clock.inspect(annex(picture(1, 2, kind=1)), 50_333_333, 0)
     assert timed["pts"] == timed["dts"]
 
 
@@ -527,7 +529,7 @@ def test_real_scaled_poc_cannot_change_presentation_timing(encoded_bframes, tmp_
     assert len(decoded[0]) == len(decoded[1]) == 15
     assert decoded[0] == decoded[1]
     for units in [original, scaled]:
-        clock = H264Clock()
+        clock = LegacyH264Clock()
         seq = next(iter(active_sps.values()))
         if seq["nal_hrd"] or seq["vcl_hrd"]:
             first = clock.inspect(units[0], 50_000_000)
@@ -608,7 +610,7 @@ def test_hrd_av_clock_matches_independent_ffmpeg_reference(tmp_path):
         )
 
     origin = min(int(p["dts"]) for p in packets if p["codec_type"] == "video")
-    clock, mux, output, expected = H264Clock(), TSMux(), bytearray(), {"video": [], "audio": []}
+    clock, mux, output, expected = LegacyH264Clock(), TSMux(), bytearray(), {"video": [], "audio": []}
     # The synthetic transport timestamps are deliberately sourced from the
     # independently probed DTS (video) and PTS (audio) of the reference file.
     for packet in sorted(packets, key=lambda p: int(p["dts"])):
@@ -677,7 +679,7 @@ def buffering_period_sei(initial_delay=1, initial_offset=0, delay_bits=3, sps_id
 @pytest.mark.parametrize("pic_struct", [False, True])
 def test_hrd_frame_picture_timing_and_required_per_au_metadata(pic_struct):
     seq = sps(hrd=True, pic_struct=pic_struct)
-    clock = H264Clock()
+    clock = LegacyH264Clock()
     first = clock.inspect(
         annex(
             seq,
@@ -696,7 +698,7 @@ def test_hrd_frame_picture_timing_and_required_per_au_metadata(pic_struct):
 def test_hrd_presentation_order_conflict_fails_closed():
     # A POC/VUI schedule is not substituted for contradictory per-picture HRD.
     # Without a proven alternate clock, reject rather than choose one signal.
-    clock = H264Clock()
+    clock = LegacyH264Clock()
     seq = sps(mode=2, hrd=True)
     buffering_period = buffering_period_sei()
     first = clock.inspect(
@@ -741,16 +743,10 @@ def test_grid_composition_does_not_inherit_hrd_poc_conflict(reorder):
     assert sink.stats["last_video_pts_90k"] == sink.stats["last_video_dts_90k"]
 
 
-def test_single_initial_hrd_idr_is_flushed_with_its_parsed_timing_at_eof(tmp_path):
-    seq = sps(mode=2, fixed=True, hrd=True)
-    idr = annex(
-        seq,
-        pps(),
-        buffering_period_sei(),
-        timing_sei(cpb=0, dpb=2),
-        picture(idr=True, mode=2),
-    )
-    capture_dir = tmp_path / "unresolved-probe"
+def test_single_grid_composition_idr_is_emitted_at_eof(tmp_path):
+    seq = sps(mode=2, fixed=False, hrd=False)
+    idr = annex(seq, pps(), picture(idr=True, mode=2))
+    capture_dir = tmp_path / "grid-idr-eof"
     output = []
     sink = MediaSink(output.append, capture_dir=capture_dir)
     sink.add(Frame(0xC748, media_body(idr, "I", 1, 50_000_000)))
@@ -777,6 +773,7 @@ def test_hrd_idr_without_required_buffering_period_is_rejected_transactionally(n
         clock.inspect(
             annex(sps(nal_hrd=nal_hrd, vcl_hrd=vcl_hrd), pps(), timing_sei(), picture(idr=True)),
             50_000_000,
+            0,
         )
     assert clock.sps == {}
     assert clock.pps == {}
@@ -785,7 +782,7 @@ def test_hrd_idr_without_required_buffering_period_is_rejected_transactionally(n
 def test_buffering_period_is_rejected_when_sps_has_no_hrd():
     with pytest.raises(GridError, match="h264_sei_buffering_period_unexpected"):
         H264Clock().inspect(
-            annex(sps(hrd=False), pps(), buffering_period_sei(), picture(idr=True)), 50_000_000
+            annex(sps(hrd=False), pps(), buffering_period_sei(), picture(idr=True)), 50_000_000, 0
         )
 
 
@@ -801,6 +798,7 @@ def test_buffering_period_rejects_zero_initial_cpb_delay_transactionally():
                 picture(idr=True),
             ),
             50_000_000,
+            0,
         )
     assert clock.sps == {}
     assert clock.pps == {}
@@ -812,6 +810,7 @@ def test_hrd_recovery_point_requires_buffering_period():
     clock.inspect(
         annex(seq, pps(), buffering_period_sei(), timing_sei(cpb=0), picture(idr=True, mode=2)),
         50_000_000,
+        0,
     )
     recovery = Bits()
     recovery.ue(0)  # recovery_frame_cnt
@@ -820,10 +819,11 @@ def test_hrd_recovery_point_requires_buffering_period():
     recovery.put(0, 2)  # changing_slice_group_idc
     recovery_sei = sei_message(6, recovery.finish_rbsp())
     with pytest.raises(GridError, match="h264_sei_buffering_period_missing"):
-        clock.inspect(annex(recovery_sei, timing_sei(cpb=1), picture(frame=1, poc=2, mode=2)), 50_082_000)
+        clock.inspect(annex(recovery_sei, timing_sei(cpb=1), picture(frame=1, poc=2, mode=2)), 50_082_000, 0)
     accepted = clock.inspect(
         annex(buffering_period_sei(), recovery_sei, timing_sei(cpb=1), picture(frame=1, poc=2, mode=2)),
         50_082_000,
+        0,
     )
     assert accepted["pts"] == accepted["dts"]
 
@@ -846,7 +846,7 @@ def test_adult_capture_hrd_field_widths_and_delays_fail_closed():
     period = sei_message(0, bp.finish_rbsp())
     first = timing_sei(cpb=240, dpb=18, cpb_bits=16, dpb_bits=6)
     second = timing_sei(cpb=2, dpb=2, cpb_bits=16, dpb_bits=6)
-    clock = H264Clock()
+    clock = LegacyH264Clock()
     observed = clock.inspect(annex(seq, pps(), period, first, picture(mode=2, idr=True)), 50_000_000)
     assert observed["sps"]["clock_tick_100ns"] == Fraction(250_000, 3)
     assert observed["sei"]["buffering_period"] == {
@@ -903,7 +903,7 @@ def test_adult_capture_hrd_field_widths_and_delays_fail_closed():
 def test_picture_timing_sei_after_vcl_is_rejected_before_timing_application():
     clock = H264Clock()
     with pytest.raises(GridError, match="h264_sei_after_vcl"):
-        clock.inspect(annex(sps(hrd=True), pps(), picture(idr=True), timing_sei(dpb=2)), 50_000_000)
+        clock.inspect(annex(sps(hrd=True), pps(), picture(idr=True), timing_sei(dpb=2)), 50_000_000, 0)
     assert clock.sps == {}  # Rejected AU did not partially commit its SPS.
 
 
@@ -921,7 +921,7 @@ def test_buffering_period_must_be_first_sei_payload_of_first_sei_nal(later_sei_n
 
     clock = H264Clock()
     with pytest.raises(GridError, match="h264_sei_buffering_period_order_invalid"):
-        clock.inspect(annex(sps(hrd=True), pps(), *units, picture(idr=True)), 50_000_000)
+        clock.inspect(annex(sps(hrd=True), pps(), *units, picture(idr=True)), 50_000_000, 0)
     assert clock.sps == {}
     assert clock.pps == {}
     assert clock.parameter_definitions == {}
@@ -937,6 +937,7 @@ def test_buffering_period_wrong_sps_id_does_not_commit_parameter_sets():
         clock.inspect(
             annex(sps(hrd=True), pps(), sei_message(0, bp.finish_rbsp()), picture(idr=True)),
             50_000_000,
+            0,
         )
     assert clock.sps == {}
     assert clock.pps == {}
@@ -945,13 +946,13 @@ def test_buffering_period_wrong_sps_id_does_not_commit_parameter_sets():
 
 def test_parameter_only_access_unit_after_start_does_not_commit_candidate_pps():
     clock = H264Clock()
-    clock.inspect(annex(sps(mode=2, fixed=False, reorder=0), pps(), picture(mode=2, idr=True)), 50_000_000)
+    clock.inspect(annex(sps(mode=2, fixed=False, reorder=0), pps(), picture(mode=2, idr=True)), 50_000_000, 0)
     prior_pps = clock.pps.copy()
     prior_definitions = clock.parameter_definitions.copy()
     prior_nals = clock.parameter_nals.copy()
 
     with pytest.raises(GridError, match="h264_vcl_missing"):
-        clock.inspect(annex(pps(parameter_id=1)), 50_033_333)
+        clock.inspect(annex(pps(parameter_id=1)), 50_033_333, 0)
 
     assert clock.pps == prior_pps
     assert clock.parameter_definitions == prior_definitions
@@ -960,20 +961,20 @@ def test_parameter_only_access_unit_after_start_does_not_commit_candidate_pps():
 
 def test_late_timing_rejection_rolls_back_codec_and_picture_state():
     clock = H264Clock()
-    clock.inspect(annex(sps(mode=2, fixed=False, reorder=0), pps(), picture(mode=2, idr=True)), 50_000_000)
+    clock.inspect(annex(sps(mode=2, fixed=False, reorder=0), pps(), picture(mode=2, idr=True)), 50_000_000, 0)
     previous_state = deepcopy(clock.__dict__)
 
     with pytest.raises(GridError, match="grid_video_dts_not_increasing"):
-        clock.inspect(annex(pps(parameter_id=1), picture(frame=1, mode=2, pps_id=1)), 50_000_000)
+        clock.inspect(annex(pps(parameter_id=1), picture(frame=1, mode=2, pps_id=1)), 50_000_000, 0)
 
     assert clock.__dict__ == previous_state
-    assert clock.inspect(annex(pps(parameter_id=1), picture(frame=1, mode=2, pps_id=1)), 50_033_333)
+    assert clock.inspect(annex(pps(parameter_id=1), picture(frame=1, mode=2, pps_id=1)), 50_033_333, 0)
 
 
 def test_valid_sps_is_retained_when_startup_picture_is_missing_its_pps():
     clock = H264Clock()
     assert (
-        clock.inspect(annex(sps(mode=2, fixed=False, reorder=0), picture(mode=2, pps_id=1)), 50_000_000)
+        clock.inspect(annex(sps(mode=2, fixed=False, reorder=0), picture(mode=2, pps_id=1)), 50_000_000, 0)
         is None
     )
     assert 0 in clock.sps
@@ -982,6 +983,7 @@ def test_valid_sps_is_retained_when_startup_picture_is_missing_its_pps():
     observed = clock.inspect(
         annex(pps(parameter_id=1), picture(mode=2, pps_id=1, idr=True)),
         50_033_333,
+        0,
     )
     assert observed["idr"]
 
@@ -992,7 +994,7 @@ def test_duplicate_picture_timing_is_rejected(across_nals):
     timing = timing_sei(dpb=2)
     units = [timing, timing] if across_nals else [escape(6, rbsp(timing)[:-1] * 2 + b"\x80")]
     with pytest.raises(GridError, match="h264_sei_timing_duplicate"):
-        H264Clock().inspect(annex(seq, pps(), *units, picture(idr=True)), 50_000_000)
+        H264Clock().inspect(annex(seq, pps(), *units, picture(idr=True)), 50_000_000, 0)
 
 
 @pytest.mark.parametrize("across_nals", [False, True])
@@ -1001,7 +1003,9 @@ def test_duplicate_buffering_period_is_rejected(across_nals):
     period = buffering_period_sei()
     units = [period, period] if across_nals else [escape(6, rbsp(period)[:-1] * 2 + b"\x80")]
     with pytest.raises(GridError, match="h264_sei_buffering_period_order_invalid"):
-        H264Clock().inspect(annex(sps(hrd=True), pps(), *units, timing_sei(), picture(idr=True)), 50_000_000)
+        H264Clock().inspect(
+            annex(sps(hrd=True), pps(), *units, timing_sei(), picture(idr=True)), 50_000_000, 0
+        )
 
 
 @pytest.mark.parametrize("pic_struct", list(range(1, 16)))
@@ -1022,31 +1026,31 @@ def test_malformed_picture_timing_alignment_cannot_supply_pts():
     # 000 010 is CPB=0, DPB=2; remaining 00 lacks payload_bit_equal_to_one.
     seq = sps(hrd=True)
     with pytest.raises(GridError):
-        H264Clock().inspect(annex(seq, pps(), sei_message(1, b"\x08"), picture(idr=True)), 50_000_000)
+        H264Clock().inspect(annex(seq, pps(), sei_message(1, b"\x08"), picture(idr=True)), 50_000_000, 0)
 
 
 def test_poc2_normatively_forbidden_consecutive_nonreference_pictures():
     clock = H264Clock()
-    clock.inspect(annex(sps(mode=2, fixed=False, reorder=0), pps(), picture(mode=2, idr=True)), 50_000_000)
+    clock.inspect(annex(sps(mode=2, fixed=False, reorder=0), pps(), picture(mode=2, idr=True)), 50_000_000, 0)
     for frame in (1, 2):
         unit = picture(frame, mode=2)
         payload = annex(bytes((0x01,)) + unit[1:])
         if frame == 1:
-            clock.inspect(payload, 50_333_333)
+            clock.inspect(payload, 50_333_333, 0)
         else:
             with pytest.raises(GridError):
-                clock.inspect(payload, 50_666_666)
+                clock.inspect(payload, 50_666_666, 0)
 
 
 def test_poc2_reference_frame_num_gap_is_not_silently_accepted():
     clock = H264Clock()
-    clock.inspect(annex(sps(mode=2, fixed=False, reorder=0), pps(), picture(mode=2, idr=True)), 50_000_000)
+    clock.inspect(annex(sps(mode=2, fixed=False, reorder=0), pps(), picture(mode=2, idr=True)), 50_000_000, 0)
     with pytest.raises(GridError):
-        clock.inspect(annex(picture(2, mode=2)), 50_333_333)
+        clock.inspect(annex(picture(2, mode=2)), 50_333_333, 0)
 
 
 def test_hrd_new_idr_cannot_output_before_prior_sequence_pictures():
-    clock = H264Clock()
+    clock = LegacyH264Clock()
     first = clock.inspect(
         annex(sps(hrd=True), pps(), buffering_period_sei(), timing_sei(cpb=0, dpb=6), picture(idr=True)),
         50_000_000,
@@ -1062,7 +1066,7 @@ def test_hrd_new_idr_cannot_output_before_prior_sequence_pictures():
 
 
 def test_hrd_mmco5_cannot_restart_output_before_its_reset_picture():
-    clock = H264Clock()
+    clock = LegacyH264Clock()
     clock.inspect(
         annex(sps(hrd=True), pps(), buffering_period_sei(), timing_sei(cpb=0), picture(idr=True)), 50_000_000
     )
@@ -1073,7 +1077,7 @@ def test_hrd_mmco5_cannot_restart_output_before_its_reset_picture():
 
 
 def test_hrd_timing_cannot_override_zero_reorder_conformance():
-    clock = H264Clock()
+    clock = LegacyH264Clock()
     clock.inspect(
         annex(
             sps(hrd=True, reorder=0),
@@ -1103,7 +1107,7 @@ def test_parameterless_mid_gop_preroll_recovers_only_at_complete_idr():
     discarded = [annex(picture(frame, mode=2)) for frame in (7, 8, 9)]
     discarded.extend([annex(seq), annex(picset), annex(picture(10, mode=2))])
     for index, payload in enumerate(discarded):
-        assert clock.inspect(payload, 50_000_000 + index * 333_333) is None
+        assert clock.inspect(payload, 50_000_000 + index * 333_333, 0) is None
         assert clock.origin_dts is None
         assert clock.last_dts is None
         assert not clock.picture_times
@@ -1113,18 +1117,18 @@ def test_parameterless_mid_gop_preroll_recovers_only_at_complete_idr():
     assert clock.sps[0]["poc_type"] == 2
     assert clock.pps[0]["sps_id"] == 0
     payload = annex(seq, picset, picture(mode=2, idr=True))
-    first = clock.inspect(payload, 52_000_000)
+    first = clock.inspect(payload, 52_000_000, 0)
     assert first["pts"] == first["dts"] == 90_000
     assert first["poc"] == 0
     assert mux.add_video(first["dts"], first["pts"], payload, idr=True)
-    next_frame = clock.inspect(annex(picture(1, mode=2)), 52_333_333)
+    next_frame = clock.inspect(annex(picture(1, mode=2)), 52_333_333, 0)
     assert next_frame["dts"] == next_frame["pts"] == 93_000
     assert clock.preroll_frames == len(discarded)
 
 
 def test_parameterless_idr_does_not_establish_a_start_boundary():
     clock = H264Clock()
-    assert clock.inspect(annex(picture(mode=2, idr=True)), 50_000_000) is None
+    assert clock.inspect(annex(picture(mode=2, idr=True)), 50_000_000, 0) is None
     assert clock.origin_dts is None
     assert clock.preroll_frames == 1
 
@@ -1133,10 +1137,10 @@ def test_preroll_frame_limit_has_exact_bounded_exhaustion():
     clock = H264Clock()
     payload = annex(picture(7, mode=2))
     for index in range(600):
-        assert clock.inspect(payload, 50_000_000 + index) is None
+        assert clock.inspect(payload, 50_000_000 + index, 0) is None
     assert clock.preroll_frames == 600
     with pytest.raises(GridError, match="h264_start_boundary_unavailable"):
-        clock.inspect(payload, 50_000_600)
+        clock.inspect(payload, 50_000_600, 0)
     assert clock.preroll_frames == 600
     assert clock.origin_dts is None
 
@@ -1146,10 +1150,10 @@ def test_preroll_byte_limit_has_exact_bounded_exhaustion():
     # One reusable MiB of filler, not buffered by the clock, exercises actual inspect accounting.
     payload = b"\0\0\1\x0c" + b"\xff" * ((1 << 20) - 4)
     for index in range(32):
-        assert clock.inspect(payload, 50_000_000 + index) is None
+        assert clock.inspect(payload, 50_000_000 + index, 0) is None
     assert clock.preroll_bytes == 32 << 20
     with pytest.raises(GridError, match="h264_start_boundary_unavailable"):
-        clock.inspect(b"\0", 50_000_032)
+        clock.inspect(b"\0", 50_000_032, 0)
     assert clock.preroll_bytes == 32 << 20
     assert clock.origin_dts is None
 
@@ -1159,10 +1163,10 @@ def test_preroll_span_limit_handles_forward_and_backward_raw_clock(direction):
     clock = H264Clock()
     payload = annex(picture(7, mode=2))
     base = 200_000_000
-    assert clock.inspect(payload, base) is None
-    assert clock.inspect(payload, base + direction * 100_000_000) is None
+    assert clock.inspect(payload, base, 0) is None
+    assert clock.inspect(payload, base + direction * 100_000_000, 0) is None
     with pytest.raises(GridError, match="h264_start_boundary_unavailable"):
-        clock.inspect(payload, base + direction * 100_000_001)
+        clock.inspect(payload, base + direction * 100_000_001, 0)
     assert clock.origin_dts is None
 
 
@@ -1171,36 +1175,36 @@ def test_preroll_span_limit_handles_forward_and_backward_raw_clock(direction):
 )
 def test_header_only_chunk_is_preroll_before_start_but_fatal_after_start(payload):
     clock = H264Clock()
-    assert clock.inspect(payload, 50_000_000) is None
-    clock.inspect(annex(sps(mode=2, fixed=False, reorder=0), pps(), picture(mode=2, idr=True)), 50_333_333)
+    assert clock.inspect(payload, 50_000_000, 0) is None
+    clock.inspect(annex(sps(mode=2, fixed=False, reorder=0), pps(), picture(mode=2, idr=True)), 50_333_333, 0)
     count = clock.preroll_frames
     with pytest.raises(GridError, match="h264_vcl_missing"):
-        clock.inspect(payload, 50_666_666)
+        clock.inspect(payload, 50_666_666, 0)
     assert clock.preroll_frames == count
 
 
 def test_missing_parameter_set_is_fatal_after_start_not_more_preroll():
     clock = H264Clock()
-    clock.inspect(annex(sps(mode=2, fixed=False, reorder=0), pps(), picture(mode=2, idr=True)), 50_000_000)
+    clock.inspect(annex(sps(mode=2, fixed=False, reorder=0), pps(), picture(mode=2, idr=True)), 50_000_000, 0)
     with pytest.raises(GridError, match="h264_parameter_set_missing"):
-        clock.inspect(annex(picture(1, mode=2, pps_id=1)), 50_333_333)
+        clock.inspect(annex(picture(1, mode=2, pps_id=1)), 50_333_333, 0)
     assert clock.preroll_frames == 0
 
 
 def test_idr_after_startup_deadline_does_not_bypass_preroll_limit():
     clock = H264Clock()
-    assert clock.inspect(annex(picture(7, mode=2)), 50_000_000) is None
+    assert clock.inspect(annex(picture(7, mode=2)), 50_000_000, 0) is None
     with pytest.raises(GridError, match="h264_start_boundary_unavailable"):
         clock.inspect(
-            annex(sps(mode=2, fixed=False, reorder=0), pps(), picture(mode=2, idr=True)), 150_000_001
+            annex(sps(mode=2, fixed=False, reorder=0), pps(), picture(mode=2, idr=True)), 150_000_001, 0
         )
 
 
 def test_cached_parameters_do_not_end_clock_preroll_before_mux_can_start():
     clock, mux = H264Clock(), TSMux()
-    assert clock.inspect(annex(sps(mode=2, fixed=False, reorder=0), pps()), 50_000_000) is None
+    assert clock.inspect(annex(sps(mode=2, fixed=False, reorder=0), pps()), 50_000_000, 0) is None
     payload = annex(picture(mode=2, idr=True))
-    timing = clock.inspect(payload, 50_333_333)
+    timing = clock.inspect(payload, 50_333_333, 0)
     if timing is not None:
         # Any accepted start must be outputtable through the unchanged production mux path.
         mux_payload = timing["decoder_prefix"] + payload
@@ -1212,8 +1216,8 @@ def test_cached_parameters_do_not_end_clock_preroll_before_mux_can_start():
 def test_startup_prefix_contains_active_pps_even_when_another_pps_is_in_band():
     clock = H264Clock()
     active_pps = pps()
-    assert clock.inspect(annex(sps(mode=2, fixed=False, reorder=0), active_pps), 50_000_000) is None
+    assert clock.inspect(annex(sps(mode=2, fixed=False, reorder=0), active_pps), 50_000_000, 0) is None
     payload = annex(pps(parameter_id=1), picture(mode=2, idr=True))
-    timed = clock.inspect(payload, 50_333_333)
+    timed = clock.inspect(payload, 50_333_333, 0)
     output_units = nals(timed["decoder_prefix"] + payload)
     assert any(unit[0] & 31 == 8 and rbsp(unit) == rbsp(active_pps) for unit in output_units)

@@ -191,7 +191,7 @@ def test_large_adts_chunk_splits_on_boundaries(index, rate):
 
 def test_absolute_audio_clock_has_no_six_hour_rescale_drift():
     clock = H264Clock()
-    clock.origin_dts, clock.reorder_lead = BASE, 6000
+    clock.origin_dts = BASE
     origin = clock.audio_pts(BASE)
     for rate in (44100, 48000):
         for samples in (0, 1024, rate * 60, rate * 3600, rate * 21600):
@@ -207,7 +207,7 @@ def test_absolute_audio_clock_has_no_six_hour_rescale_drift():
 def test_clock_trusts_grid_timestamps_including_drift_and_regression():
     clock = H264Clock()
     assert clock.audio_pts(BASE) is None
-    clock.origin_dts, clock.reorder_lead = BASE, 0
+    clock.origin_dts = BASE
     # A 100 ppm error in Grid audio timestamps gives 360 ms error after an hour.
     assert clock.audio_pts(BASE + 36_003_600_000) - clock.audio_pts(BASE + 36_000_000_000) == 32400
     assert clock.audio_pts(BASE) == clock.audio_pts(BASE)

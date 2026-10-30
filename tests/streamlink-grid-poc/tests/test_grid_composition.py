@@ -62,12 +62,14 @@ def test_cache_identity_includes_composition_but_not_auxiliary_field():
         continuity.accept(parse_media(video(offset=160000)))
 
 
-def test_new_epoch_cannot_switch_between_timing_sources():
+def test_composition_is_required_after_an_accepted_picture():
     clock = H264Clock()
     chunk = parse_media(video())
     clock.inspect(chunk.payload, chunk.timestamp, 0)
-    with pytest.raises(GridError, match="h264_timing_changed"):
+    with pytest.raises(TypeError, match="composition_offset"):
         clock.inspect(chunk.payload, chunk.timestamp + 1_000_000)
+    with pytest.raises(GridError, match="grid_composition_offset_unsupported"):
+        clock.inspect(chunk.payload, chunk.timestamp + 1_000_000, None)
 
 
 def test_startup_buffer_is_bounded_without_audio():
@@ -125,3 +127,72 @@ def test_unverified_media_version_cannot_reuse_composition_layout():
     struct.pack_into("<H", body, 0, 2)
     with pytest.raises(GridError, match="media_layout_unconfirmed"):
         parse_media(body)
+
+
+@pytest.mark.parametrize("offset", [None, False, True, -1, 1 << 31, 1.0, "0"])
+def test_clock_rejects_invalid_composition_before_parsing_or_preroll(offset):
+    clock = H264Clock()
+    before = clock.__dict__.copy()
+    with pytest.raises(GridError, match="grid_composition_offset_unsupported"):
+        clock.inspect(b"invalid syntax", 50_000_000, offset)
+    assert clock.__dict__ == before
+
+
+def test_clock_requires_composition_even_before_start():
+    clock = H264Clock()
+    with pytest.raises(TypeError, match="composition_offset"):
+        clock.inspect(b"invalid syntax", 50_000_000)
+    assert not clock.sps and clock.preroll_frames == 0
+
+
+def test_clock_rejects_composition_overflow_before_parsing():
+    with pytest.raises(GridError, match="media_timestamp_bounds"):
+        H264Clock().inspect(b"invalid syntax", (1 << 64) - 1, 1)
+
+
+def test_grid_composition_needs_neither_hrd_picture_timing_nor_fixed_vui():
+    from test_h264_audit import buffering_period_sei
+
+    clock = H264Clock()
+    first = annex(
+        sps(mode=2, hrd=True, fixed=False), pps(), buffering_period_sei(), picture(mode=2, idr=True)
+    )
+    timed = clock.inspect(first, 50_000_000, 333_333)
+    assert timed["pts"] - timed["dts"] == 3000
+    assert "picture_timing" not in timed["sei"]
+    second = clock.inspect(annex(picture(1, mode=2)), 50_333_333, 333_333)
+    assert second["timing_model"] == "grid_composition"
+    assert second["pts"] == 96_000
+
+
+@pytest.mark.parametrize(
+    "mode,mmco,code",
+    [
+        (1, False, "h264_grid_poc_type_unverified"),
+        (0, True, "h264_grid_mmco5_unverified"),
+    ],
+)
+def test_production_preserves_unverified_poc_and_mmco_restrictions(mode, mmco, code):
+    clock = H264Clock()
+    first = annex(sps(mode=mode, reorder=0), pps(), picture(mode=mode, idr=True))
+    if mode == 1:
+        with pytest.raises(GridError, match=code):
+            clock.inspect(first, 50_000_000, 0)
+        assert clock.origin_dts is None
+    else:
+        clock.inspect(first, 50_000_000, 0)
+        with pytest.raises(GridError, match=code):
+            clock.inspect(annex(picture(1, 2, mode=mode, mmco=mmco)), 50_333_333, 0)
+        assert clock.last_poc == 0
+
+
+def test_production_preserves_low_delay_hrd_restriction():
+    from test_h264_audit import buffering_period_sei
+
+    payload = annex(
+        sps(mode=2, hrd=True, low_delay=True), pps(), buffering_period_sei(), picture(mode=2, idr=True)
+    )
+    clock = H264Clock()
+    with pytest.raises(GridError, match="h264_hrd_low_delay_timing_unsupported"):
+        clock.inspect(payload, 50_000_000, 0)
+    assert clock.origin_dts is None and not clock.sps
