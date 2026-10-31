@@ -131,6 +131,9 @@ def test_error_after_pending_bytes_and_no_secret_exception_text():
     assert r.stats["stream_reader_bytes"] == r.stats["stream_emit_bytes"] == 4
     assert r.stats["stream_buffer_accepted_bytes"] == 4
     assert r.stats["stream_buffer_discarded_bytes"] == r.stats["stream_buffer_unaccepted_bytes"] == 0
+    assert r.stats["stream_output_bytes_drained"] == 1
+    assert r.stats["reader_eof_observed"] == 0
+    assert r.stats["stream_output_drain_complete"] == 0
 
 
 def test_open_waits_for_actual_output_and_timeout_cleans_worker():
@@ -512,6 +515,7 @@ def test_close_with_undrained_duration_output_is_not_reported_as_success():
     assert output.stats["stream_buffer_discarded_bytes"] == len(payload)
     assert output.stats["stream_buffer_unaccepted_bytes"] == 0
     assert output.stats["stream_output_drain_complete"] == 0
+    assert output.stats["stream_output_bytes_drained"] == 0
     assert output.stats["stream_emit_bytes"] == output.stats["stream_buffer_accepted_bytes"] == len(payload)
     assert output.stats.get("stream_reader_bytes", 0) == 0
     assert output.buffer.data == b""
@@ -561,6 +565,8 @@ def test_fully_drained_duration_output_remains_successful():
     assert output.diagnostics.reason == "duration_limit"
     assert "stream_output_discarded_bytes" not in output.stats
     assert output.stats["stream_output_drain_complete"] == 1
+    assert output.stats["stream_output_bytes_drained"] == 1
+    assert output.stats["reader_eof_observed"] == 1
     assert output.stats["stream_emit_bytes"] == output.stats["stream_reader_bytes"]
     assert output.stats["stream_reader_bytes"] == output.stats["stream_buffer_accepted_bytes"]
 

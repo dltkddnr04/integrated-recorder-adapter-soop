@@ -6,7 +6,7 @@ An external Python plugin that receives SOOP Native Grid broadcasts through Stre
 
 ## Status
 
-This is an **Experimental/Beta** project preparing for its first public release. Single-file loading and real Grid reception were verified on Linux with Python 3.12.3 and Streamlink 8.6.2. Results from bounded live captures and controlled Parent socket-close recovery are in the [validation report](docs/LIVE_FAILOVER_VALIDATION.md). The plugin does not claim stable or universally lossless operation.
+This remains an **Experimental/Beta** plugin; Stable Candidate validation is complete, but no Stable release is being declared. Bundle `30ea7bd2…` passed source-matched 600-second A/V validation, a 7,200.986-second Grid-only run, two-hour event comparison, and three controlled Parent socket-close recoveries through the actual StreamIO consumer/EOF/drain path on Linux, Python 3.12, and Streamlink 8.6.2. The [Stable Candidate report](docs/STABLE_CANDIDATE_VALIDATION.md) records measurements and scope. Natural server failures, total Internet outage, every broadcast/codec configuration, perceptual lip-sync on arbitrary content, and Cyneti co-viewing compatibility remain unverified.
 
 ## Features
 
@@ -54,8 +54,9 @@ When omitted, the transport option defaults to `auto`, which tries Native Grid f
 
 ## Key limitations
 
-- Experimental/Beta. The latest bundle, `400f028e…`, completed a 30-minute Grid-only recording and passed full H.264/AAC decode plus TS/timestamp checks; that run contained no B pictures. A separate 30-minute run using an earlier bundle contained B pictures and passed full-file checks, but it is not represented as a same-build test. Grid composition timing has been replayed offline on four original captures. HRD disagreement alone no longer generates PTS; actual POC/PTS contradictions still fail closed. Perceptual A/V sync, all codec/broadcast combinations, and repeated long-duration natural failures remain unverified. See the [latest 30-minute report](docs/LIVE_VALIDATION_30M_20261028.md) and [timeline analysis](docs/TIMELINE_MODEL_FIELD_VALIDATION_20261028.md).
-- A roughly 600-second recording and three Cache-assisted recoveries after client-side Parent socket closes in one session were verified in controlled experiments. This does not guarantee lossless recovery from every failure.
+- Stable Candidate measurements are limited to the [validation report](docs/STABLE_CANDIDATE_VALIDATION.md). Grid composition PTS and real-time POC/PTS contradiction checks remain enabled; unsupported H.264 structures still fail closed. Older reports remain revision-specific historical records and are not counted as results from the latest bundle.
+- An earlier 121-second wall-clock Pilot B still ended with `media_track_coverage_incomplete`. Its roughly 517 ms final audio/video boundary remains unexplained because packet-arrival timestamps were not recorded; later window and endurance passes do not reclassify that run as complete.
+- The 600-second and two-hour measurements use deterministic source-relative A/V test events. They do not prove perceptual synchronization for arbitrary program content or guarantee lossless operation for every failure.
 - Automatic account reauthentication, reliable classification of broadcast end versus network failure, and automatic broadcast-number changes are not supported.
 - Support is limited to validated subsets of H.264 timing/POC structures and ADTS AAC. Multi-Parent simultaneous reception is not supported.
 - Native Grid exposes one `original` stream. Streamlink 8.6.2's `best` and `worst` aliases resolve to that same Grid stream; this does not add Grid quality levels. HLS retains the quality list from the built-in `soop` plugin.

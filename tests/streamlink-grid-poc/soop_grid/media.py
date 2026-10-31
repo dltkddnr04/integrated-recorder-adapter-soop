@@ -590,9 +590,10 @@ class MediaSink:
                 and abs(video_window_end - audio_end) <= edge
             )
             self.stats["av_start_preroll_explained"] = int(explained_preroll)
+            start_unexplained = abs(video_start - audio_start) > edge and not explained_preroll
             span_status = (
                 "incomplete"
-                if not windows_overlap or (abs(delta) > edge and not explained_preroll)
+                if not windows_overlap or start_unexplained or (abs(delta) > edge and not explained_preroll)
                 else "consistent"
             )
         self.stats["av_track_span_status"] = span_status

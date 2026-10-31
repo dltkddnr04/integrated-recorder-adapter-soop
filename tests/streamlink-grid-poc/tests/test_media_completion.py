@@ -133,6 +133,13 @@ def test_equal_length_but_disjoint_track_windows_are_not_consistent():
         validate_media_output(facts)
 
 
+def test_equal_length_overlapping_tracks_with_unexplained_start_shift_fail():
+    facts = sink_with_timeline(video_count=30, audio_count=47, audio_offset=45000)
+    assert facts["av_track_span_status"] == "incomplete"
+    with pytest.raises(GridError, match="media_track_coverage_incomplete"):
+        validate_media_output(facts)
+
+
 def test_one_oversized_aac_bundle_cannot_hide_a_track_span_gap():
     facts = sink_with_timeline(video_count=30, audio_count=47, extra_audio_samples=48000 * 10)
     assert facts["audio_output_last_packet_duration_90k"] == 900000

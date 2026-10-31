@@ -481,7 +481,7 @@ def _sg_crypto_service6(guid, timestamp, counter):
     return _sg_crypto_wire_hash(_sg_crypto_pad16(second)) + _sg_crypto_ctr(_sg_crypto_SERVICE_KEY, _sg_crypto_SERVICE_IV, second)
 
 
-# Module: diagnostics; source SHA-256: a6cc4998c15886474e4351b6d61fbbfc41435822b6e7c74dae445146c931abe5
+# Module: diagnostics; source SHA-256: e5a0b432f7aa1a7d3593f7460df3d4e39baec131903379289e2a2116ff7b331a
 import errno as _sg_diagnostics_errno
 import json as _sg_diagnostics_json
 import logging as _sg_diagnostics_logging
@@ -494,7 +494,7 @@ _sg_diagnostics_Cancelled = _sg_protocol_Cancelled
 _sg_diagnostics_GridError = _sg_protocol_GridError
 _sg_diagnostics__log = _sg_diagnostics_logging.getLogger('streamlink.plugins.soop_grid')
 _sg_diagnostics_EVENTS = frozenset(['account_session_confirmed', 'center_join_accepted', 'center_rediscovery_failed', 'center_rediscovery_completed', 'cleanup_failed_after_primary_error', 'gateway_certificate_received', 'gateway_login_accepted', 'grid_duration_limit_reached', 'grid_frame_gap_detected', 'grid_frame_gap_recovered', 'grid_frame_gap_unrecoverable', 'grid_live_resumed', 'live_push_transition_requested', 'grid_media_byte_limit_reached', 'heartbeat', 'media_packet_rejected', 'native_tk_ftk_metadata_received', 'new_node_key_obtained', 'parent_c748_media_received', 'parent_candidate_failed', 'parent_candidate_selected', 'parent_connected', 'parent_connection_lost', 'parent_failure_detected', 'parent_handshake_completed', 'parent_last_media_received', 'parent_tcp_connect_started', 'parent_tcp_connected', 'parent_discovery_received', 'parent_failover_exhausted', 'parent_failover_started', 'parent_failover_succeeded', 'parent_rediscovery_started', 'recovery_completed', 'recovery_started', 'recovery_failed', 'cache_request_sent', 'cache_first_media_received', 'overlap_frame_verified', 'first_new_frame_accepted', 'public_watch_ticket_received', 'reader_closed', 'reader_eof', 'reader_error', 'reader_shutdown_timeout', 'receiver_started', 'stream_output_incomplete', 'stream_output_discarded', 'unknown_event', 'worker_finished'])
-_sg_diagnostics_NUMERIC_FIELDS = frozenset('\nmedia_packets payload_bytes wire_bytes parent_wire_bytes video_frames audio_frames sequence_discontinuities\n mux_output_bytes stream_emit_bytes stream_reader_bytes stream_output_discarded_bytes\nstream_buffer_accepted_bytes stream_buffer_discarded_bytes stream_buffer_unaccepted_bytes stream_output_drain_complete\nparent_connections failover_attempts failover_successes rediscoveries duplicate_frames_excluded\ngap_events recovered_ranges unrecoverable_ranges parent_connection_attempts parent_packets\nlast_normal_frame last_video_dts_90k last_video_pts_90k active_parents last_control_command\ncache_request_count last_cache_request_start last_media_monotonic\nfailure_detection_ms candidate_selection_ms center_rediscovery_ms parent_tcp_connect_ms\nparent_handshake_ms cache_first_byte_ms overlap_verification_ms first_new_frame_ms\ntotal_recovery_ms cache_frames_received cache_frames_replayed overlap_duplicates_discarded\nmissing_frames frame_identity_conflicts recovery_wire_bytes recovery_media_bytes\nrecovery_success recovery_failures recovery_failure_attempts catchup_duration_ms catchup_throughput_bytes_per_sec\nfailover_backoff_ms_saved\nrejected_body_bytes rejected_header_bytes rejected_extension_bytes rejected_payload_bytes\nrejected_packet_preservation_failed\ncenter_rediscovery_failed\nextended_media_packets media_extension_bytes\nh264_poc_type h264_fixed_vui_timing last_video_poc\nh264_current_poc_type h264_current_fixed_vui h264_current_idr h264_current_mmco5\nh264_low_delay_hrd\nh264_hrd_present h264_sei_timing_present h264_current_grid_delta_100ns h264_current_poc\nh264_cpb_removal_delay h264_dpb_output_delay h264_hrd_poc_order_conflicts\nh264_current_dts_90k h264_current_candidate_pts_90k h264_previous_output_epoch_floor_90k\nh264_conflicting_reference_poc h264_conflicting_reference_pts_90k\nh264_clock_tick_100ns_numerator h264_clock_tick_100ns_denominator\nh264_initial_timing_probe_incomplete\nh264_rejected_cpb_removal_delay h264_previous_cpb_removal_delay h264_rejected_cpb_delta\nh264_rejected_grid_delta_100ns h264_rejected_cpb_delta_100ns h264_rejected_cpb_delay_width\nh264_rejected_clock_tolerance_100ns h264_rejected_cpb_epoch_ticks\nh264_rejected_cpb_epoch_delta_100ns h264_rejected_grid_epoch_delta_100ns\naudio_adts_frames audio_access_units audio_core_samples audio_output_access_units audio_output_core_samples\naudio_preroll_unoutput_access_units audio_chunk_clock_delta_100ns audio_max_chunk_clock_delta_100ns\naudio_chunk_overlap_100ns audio_max_chunk_overlap_100ns audio_clock_drift_100ns\nvideo_preroll_frames video_preroll_bytes\nvideo_parameter_prefix_bytes\nvideo_output_frames playable_video_frames\nvideo_output_first_pts_90k video_output_end_pts_90k audio_output_first_pts_90k audio_output_end_pts_90k\naudio_output_last_packet_duration_90k av_output_coverage_delta_90k av_output_coverage_edge_90k\nav_output_start_offset_90k av_output_end_offset_90k\n'.split())
+_sg_diagnostics_NUMERIC_FIELDS = frozenset('\nmedia_packets payload_bytes wire_bytes parent_wire_bytes video_frames audio_frames sequence_discontinuities\n mux_output_bytes stream_emit_bytes stream_reader_bytes stream_output_discarded_bytes\nstream_buffer_accepted_bytes stream_buffer_discarded_bytes stream_buffer_unaccepted_bytes stream_output_drain_complete stream_output_bytes_drained reader_eof_observed\nparent_connections failover_attempts failover_successes rediscoveries duplicate_frames_excluded\ngap_events recovered_ranges unrecoverable_ranges parent_connection_attempts parent_packets\nlast_normal_frame last_video_dts_90k last_video_pts_90k active_parents last_control_command\ncache_request_count last_cache_request_start last_media_monotonic\nfailure_detection_ms candidate_selection_ms center_rediscovery_ms parent_tcp_connect_ms\nparent_handshake_ms cache_first_byte_ms overlap_verification_ms first_new_frame_ms\ntotal_recovery_ms cache_frames_received cache_frames_replayed overlap_duplicates_discarded\nmissing_frames frame_identity_conflicts recovery_wire_bytes recovery_media_bytes\nrecovery_success recovery_failures recovery_failure_attempts catchup_duration_ms catchup_throughput_bytes_per_sec\nfailover_backoff_ms_saved\nrejected_body_bytes rejected_header_bytes rejected_extension_bytes rejected_payload_bytes\nrejected_packet_preservation_failed\ncenter_rediscovery_failed\nextended_media_packets media_extension_bytes\nh264_poc_type h264_fixed_vui_timing last_video_poc\nh264_current_poc_type h264_current_fixed_vui h264_current_idr h264_current_mmco5\nh264_low_delay_hrd\nh264_hrd_present h264_sei_timing_present h264_current_grid_delta_100ns h264_current_poc\nh264_cpb_removal_delay h264_dpb_output_delay h264_hrd_poc_order_conflicts\nh264_current_dts_90k h264_current_candidate_pts_90k h264_previous_output_epoch_floor_90k\nh264_conflicting_reference_poc h264_conflicting_reference_pts_90k\nh264_clock_tick_100ns_numerator h264_clock_tick_100ns_denominator\nh264_initial_timing_probe_incomplete\nh264_rejected_cpb_removal_delay h264_previous_cpb_removal_delay h264_rejected_cpb_delta\nh264_rejected_grid_delta_100ns h264_rejected_cpb_delta_100ns h264_rejected_cpb_delay_width\nh264_rejected_clock_tolerance_100ns h264_rejected_cpb_epoch_ticks\nh264_rejected_cpb_epoch_delta_100ns h264_rejected_grid_epoch_delta_100ns\naudio_adts_frames audio_access_units audio_core_samples audio_output_access_units audio_output_core_samples\naudio_preroll_unoutput_access_units audio_chunk_clock_delta_100ns audio_max_chunk_clock_delta_100ns\naudio_chunk_overlap_100ns audio_max_chunk_overlap_100ns audio_clock_drift_100ns\nvideo_preroll_frames video_preroll_bytes\nvideo_parameter_prefix_bytes\nvideo_output_frames playable_video_frames\nvideo_output_first_pts_90k video_output_end_pts_90k audio_output_first_pts_90k audio_output_end_pts_90k\naudio_output_last_packet_duration_90k av_output_coverage_delta_90k av_output_coverage_edge_90k\nav_output_start_offset_90k av_output_end_offset_90k\n'.split())
 
 def _sg_diagnostics_safe_error(error):
     code = str(error) if isinstance(error, _sg_diagnostics_GridError) else 'receiver_internal_failure'
@@ -2122,7 +2122,7 @@ class _sg_h264clock_H264Clock:
         return self._rescale(timestamp_100ns - self.origin_dts) + 90000
 
 
-# Module: media; source SHA-256: c1919887c67b56c1e13686ab3f9805adb35a0b859e4b0b80535890fa43bcc722
+# Module: media; source SHA-256: a3506e81613cba9f379379d8b0a8fdbc063f82dc7e6274e4cd15d687ed8f44ea
 import hashlib as _sg_media_hashlib
 import json as _sg_media_json
 import os as _sg_media_os
@@ -2583,7 +2583,8 @@ class _sg_media_MediaSink:
             origin = self.video_clock.origin_dts
             explained_preroll = self.video_clock.preroll_frames > 0 and preroll_start is not None and (preroll_end is not None) and (self.first_output_video_dts is not None) and (origin is not None) and (audio_start < video_start) and (audio_start >= self.video_clock._rescale(preroll_start - origin) + 90000 - edge) and (0 <= self.first_output_video_dts - (self.video_clock._rescale(preroll_end - origin) + 90000) <= edge) and (abs(video_window_end - audio_end) <= edge)
             self.stats['av_start_preroll_explained'] = int(explained_preroll)
-            span_status = 'incomplete' if not windows_overlap or (abs(delta) > edge and (not explained_preroll)) else 'consistent'
+            start_unexplained = abs(video_start - audio_start) > edge and (not explained_preroll)
+            span_status = 'incomplete' if not windows_overlap or start_unexplained or (abs(delta) > edge and (not explained_preroll)) else 'consistent'
         self.stats['av_track_span_status'] = span_status
         if self.mux.first_pts is not None:
             self.stats['media_timeline_seconds'] = (self.mux.max_pts - self.mux.min_pts) / 90000
@@ -3214,7 +3215,7 @@ def _sg_gateway_obtain_certificate(network, session, report):
         network.release(sock)
 
 
-# Module: stream; source SHA-256: 9349a622e60ce8826ce703f653400b77a9f7ebc6f11d18f09816bec934c1cacd
+# Module: stream; source SHA-256: dd092a50d1a5c34bbf1c227a09a0444938308d446611ea219d068817d4e97f06
 import threading as _sg_stream_threading
 import time as _sg_stream_time
 import logging as _sg_stream_logging
@@ -3396,7 +3397,7 @@ class _sg_stream_SoopGridReader(_sg_stream_StreamIO):
         self.buffer = _sg_stream_BoundedBuffer(stream.buffer_size, stream.timeout)
         self.runner = runner
         self.thread = None
-        self.stats = {'stream_output_drain_complete': 0}
+        self.stats = {'stream_output_drain_complete': 0, 'stream_output_bytes_drained': 0, 'reader_eof_observed': 0}
         self.stages = _sg_stream_deque(maxlen=128)
         self._close_lock = _sg_stream_threading.Lock()
         self._closing = False
@@ -3501,6 +3502,7 @@ class _sg_stream_SoopGridReader(_sg_stream_StreamIO):
                 self.stats['stream_reader_bytes'] = self.stats.get('stream_reader_bytes', 0) + len(result)
             elif size != 0:
                 self.reader_state = 'eof'
+                self.stats['reader_eof_observed'] = 1
                 self.diagnostics.event('reader', 'reader_eof')
             return result
         except _sg_stream_StreamError as exc:
@@ -3553,6 +3555,7 @@ class _sg_stream_SoopGridReader(_sg_stream_StreamIO):
             self.diagnostics.mark_output_incomplete()
             self.diagnostics.event('reader', 'stream_output_incomplete')
             _sg_stream__log.error('Native Grid output closed before queued data was consumed (%s bytes)', discarded_bytes)
+        self.stats['stream_output_bytes_drained'] = int(self.thread is not None and (not self.thread.is_alive()) and (not discarded_bytes) and (self.buffer.accepted_bytes > 0) and (self.stats.get('stream_reader_bytes', 0) == self.stats.get('stream_emit_bytes', 0)) and (self.stats.get('stream_emit_bytes', 0) == self.buffer.accepted_bytes))
         self.stats['stream_output_drain_complete'] = int(self.diagnostics.reason in ('duration_limit', 'byte_limit') and (not discarded_bytes) and (self.stats.get('stream_reader_bytes', 0) == self.stats.get('stream_emit_bytes', 0)) and (self.stats.get('stream_emit_bytes', 0) == self.buffer.accepted_bytes))
         self.stream.config.clear()
         if self.reader_state != 'shutdown_timeout':

@@ -220,7 +220,11 @@ class SoopGridReader(StreamIO):
         self.buffer = BoundedBuffer(stream.buffer_size, stream.timeout)
         self.runner = runner
         self.thread = None
-        self.stats = {"stream_output_drain_complete": 0}
+        self.stats = {
+            "stream_output_drain_complete": 0,
+            "stream_output_bytes_drained": 0,
+            "reader_eof_observed": 0,
+        }
         self.stages = deque(maxlen=128)
         self._close_lock = threading.Lock()
         self._closing = False
@@ -347,6 +351,7 @@ class SoopGridReader(StreamIO):
                 self.stats["stream_reader_bytes"] = self.stats.get("stream_reader_bytes", 0) + len(result)
             elif size != 0:
                 self.reader_state = "eof"
+                self.stats["reader_eof_observed"] = 1
                 self.diagnostics.event("reader", "reader_eof")
             return result
         except StreamError as exc:
@@ -404,6 +409,14 @@ class SoopGridReader(StreamIO):
                 "Native Grid output closed before queued data was consumed (%s bytes)",
                 discarded_bytes,
             )
+        self.stats["stream_output_bytes_drained"] = int(
+            self.thread is not None
+            and not self.thread.is_alive()
+            and not discarded_bytes
+            and self.buffer.accepted_bytes > 0
+            and self.stats.get("stream_reader_bytes", 0) == self.stats.get("stream_emit_bytes", 0)
+            and self.stats.get("stream_emit_bytes", 0) == self.buffer.accepted_bytes
+        )
         self.stats["stream_output_drain_complete"] = int(
             self.diagnostics.reason in ("duration_limit", "byte_limit")
             and not discarded_bytes

@@ -6,7 +6,7 @@ SOOP Native Grid 방송을 Streamlink에서 직접 수신하는 외부 Python �
 
 ## 상태
 
-**Experimental/Beta** 플러그인입니다. Linux/Python 3.12/Streamlink 8.6.2에서 배포 단일 파일과 Native Grid 수신을 검증했습니다. 과거 검증 번들 `400f028e…`로 Grid-only 30분 녹화를 완료하고, 전체 H.264/AAC 디코딩과 TS·타임스탬프 검사를 통과했습니다. 이 실행에는 B-frame이 없었습니다. 별도 이전 번들의 30분 실방송에는 B-frame이 포함되어 전체 검증을 통과했지만, 그것을 `400f`와 동일한 빌드 시험으로 합산하지 않습니다. 지각적 A/V 동기, 모든 HRD/POC 변형 및 장시간 자연 장애 복구는 입증되지 않았습니다. [최신 30분 검증 보고서](docs/LIVE_VALIDATION_30M_20261028.md), [시간축 분석](docs/TIMELINE_MODEL_FIELD_VALIDATION_20261028.md), [복구 검증](docs/LIVE_FAILOVER_VALIDATION.md)을 참고하세요. 모든 방송에서의 무손실 동작을 보장하지 않습니다.
+**Experimental/Beta 플러그인 — Stable Candidate 검증 완료, 정식 Stable release 아님.** Linux/Python 3.12/Streamlink 8.6.2에서 번들 `30ea7bd2…`로 600초 원본 대조 A/V 검증, 7,200.986초 Grid-only 수신, 2시간 이벤트 비교, 그리고 실제 StreamIO 소비 경로를 포함한 Parent 소켓 종료 3회 복구를 통과했습니다. 검증한 H.264/AAC 구간의 원본→PES payload identity, POC–PTS, TS 및 자연 EOF/drain도 확인했습니다. 시험 수치와 범위는 [Stable Candidate 검증 보고서](docs/STABLE_CANDIDATE_VALIDATION.md)에 있습니다. 자연 발생 서버 장애, 전체 인터넷 단절, 모든 방송·코덱 조합, 임의 콘텐츠의 지각적 립싱크 및 Cyneti 같이보기 호환성은 검증하지 않았습니다. 모든 방송에서의 무손실 동작을 보장하지 않습니다.
 
 ## 주요 기능
 
@@ -54,7 +54,8 @@ streamlink 'https://play.sooplive.com/CHANNEL_ID/BNO' original -o recording.ts
 
 ## 주요 제한
 
-- Experimental/Beta입니다. 과거 검증 번들 `400f028e…`로 30분 Grid-only 녹화와 전체 파일 디코딩·TS 타임스탬프 검사를 통과했지만, 해당 방송에는 B-frame이 없었습니다. 이전 번들의 별도 30분 녹화에서는 B-frame 재정렬을 검증했으며, 두 결과를 동일 빌드 결과로 표현하지 않습니다. Grid composition 기반 PTS는 원본 4개 캡처에서 오프라인 검증했으며, 기존 HRD 지연과의 충돌만으로 거부하지 않습니다. 실제 POC/PTS 순서 모순은 계속 거부합니다. 지각적 A/V 동기, 모든 코덱·방송 조합 및 장시간 자연 장애 복구는 미입증입니다. [최신 30분 검증](docs/LIVE_VALIDATION_30M_20261028.md)과 [시간축 분석](docs/TIMELINE_MODEL_FIELD_VALIDATION_20261028.md)을 참고하세요.
+- Stable Candidate 측정값은 [검증 보고서](docs/STABLE_CANDIDATE_VALIDATION.md)에 한정됩니다. Grid composition 기반 PTS와 POC/PTS 모순 검사는 유지되며, 지원하지 않는 H.264 구조는 fail-closed입니다. 과거 30분 보고서와 다른 번들의 결과는 역사 기록이며 최신 번들의 실방송 결과로 합산하지 않습니다.
+- 과거 121초 wall-clock Pilot B는 `media_track_coverage_incomplete`로 종료됐고, 마지막 약 517ms 오디오/영상 경계의 원인은 수신 시각 자료가 없어 미확정입니다. 이후의 공통 구간·장시간 검증은 그 실행을 완료 PASS로 바꾸지 않습니다.
 - 제어된 실험에서 약 600초 녹화와 한 세션의 Parent 소켓 종료 3회 후 Cache 기반 복구를 확인했습니다. 이는 모든 장애에서의 무손실 보장이 아닙니다.
 - 자동 계정 재인증, 방송 종료와 네트워크 장애의 완전한 구분, 방송 번호 자동 전환은 지원하지 않습니다.
 - 지원 범위는 검증된 H.264 timing/POC 구조와 ADTS AAC 일부입니다. 다중 Parent 동시 수신은 지원하지 않습니다.
